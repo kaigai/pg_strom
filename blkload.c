@@ -27,6 +27,7 @@
 #include "utils/rel.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/tqual.h"
 #include "utils/varbit.h"
@@ -328,7 +329,7 @@ pgstrom_data_load_internal(Relation srel,
 	/*
 	 * Scan the source relation
 	 */
-	scan = heap_beginscan(srel, SnapshotNow, 0, NULL);
+	scan = heap_beginscan(srel, GetActiveSnapshot(), 0, NULL);
 
 	oldcxt = MemoryContextSwitchTo(cs_memcxt);
 
@@ -593,7 +594,7 @@ pgstrom_data_clear(PG_FUNCTION_ARGS)
 	/*
 	 * Clear the rowid map
 	 */
-	scan = heap_beginscan(id_rel, SnapshotNow, 0, NULL);
+	scan = heap_beginscan(id_rel, GetActiveSnapshot(), 0, NULL);
 	while (HeapTupleIsValid(tuple = heap_getnext(scan, ForwardScanDirection)))
 	{
 		simple_heap_delete(id_rel, &tuple->t_self);
@@ -606,7 +607,7 @@ pgstrom_data_clear(PG_FUNCTION_ARGS)
 	 */
 	for (csidx = 0; csidx < nattrs; csidx++)
 	{
-		scan = heap_beginscan(cs_rels[csidx], SnapshotNow, 0, NULL);
+		scan = heap_beginscan(cs_rels[csidx], GetActiveSnapshot(), 0, NULL);
 		while (HeapTupleIsValid(tuple = heap_getnext(scan,
 													 ForwardScanDirection)))
 		{

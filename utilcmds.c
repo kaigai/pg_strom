@@ -36,6 +36,7 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/tqual.h"
 #include "pg_strom.h"
@@ -493,7 +494,7 @@ pgstrom_shadow_relation_rename(const char *old_nspname,
 				 errmsg("Name of shadow relation \"%s\" too long",
 						new_name)));
 
-	RenameRelationInternal(shadow_relid, new_name);
+	RenameRelationInternal(shadow_relid, new_name, true);
 }
 
 /*
@@ -545,7 +546,7 @@ pgstrom_post_alter_schema(AlterObjectSchemaStmt *stmt,
 				Int16GetDatum(InvalidAttrNumber));
 
 	scan = systable_beginscan(pg_attr, AttributeRelidNumIndexId, true,
-							  SnapshotNow, 2, skey);
+							  NULL, 2, skey);
 	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
 	{
 		Form_pg_attribute	attr = (Form_pg_attribute) GETSTRUCT(tuple);
@@ -606,7 +607,7 @@ pgstrom_post_rename_schema(RenameStmt *stmt, Oid namespaceId)
 				BTEqualStrategyNumber, F_CHAREQ,
 				CharGetDatum(RELKIND_FOREIGN_TABLE));
 
-	scan = heap_beginscan(pg_class, SnapshotNow, 2, skey);
+	scan = heap_beginscan(pg_class, GetActiveSnapshot(), 2, skey);
 
 	while (HeapTupleIsValid(tuple = heap_getnext(scan, ForwardScanDirection)))
 	{
@@ -728,7 +729,7 @@ pgstrom_post_rename_table(RenameStmt *stmt, Oid base_relid)
 				Int16GetDatum(InvalidAttrNumber));
 
 	scan = systable_beginscan(pg_attr, AttributeRelidNumIndexId, true,
-							  SnapshotNow, 2, skey);
+							  NULL, 2, skey);
 
 	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
 	{
@@ -860,7 +861,7 @@ pgstrom_post_change_owner(Oid base_relid, AlterTableCmd *cmd,
                 Int16GetDatum(InvalidAttrNumber));
 
 	scan = systable_beginscan(pg_attr, AttributeRelidNumIndexId, true,
-							  SnapshotNow, 2, skey);
+							  NULL, 2, skey);
 	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
 	{
 		Form_pg_attribute   attr = (Form_pg_attribute) GETSTRUCT(tuple);
@@ -979,10 +980,10 @@ pgstrom_post_alter_column_type(Oid base_relid, AlterTableCmd *cmd,
 static void
 pgstrom_process_utility_command(Node *parsetree,
 								const char *queryString,
+								ProcessUtilityContext context,
 								ParamListInfo params,
 								DestReceiver *dest,
-								char *completionTag,
-								ProcessUtilityContext context)
+								char *completionTag)
 {
 	ForeignTable	   *ft;
 	ForeignServer	   *fs;
@@ -1043,11 +1044,11 @@ pgstrom_process_utility_command(Node *parsetree,
 	 * Call the original ProcessUtility
 	 */
 	if (next_process_utility_hook)
-		(*next_process_utility_hook)(parsetree, queryString, params,
-									 dest, completionTag, context);
+		(*next_process_utility_hook)(parsetree, queryString, context,
+									 params, dest, completionTag);
 	else
-		standard_ProcessUtility(parsetree, queryString, params,
-								dest, completionTag, context);
+		standard_ProcessUtility(parsetree, queryString, context,
+								params, dest, completionTag);
 
 	/*
 	 * Post ProcessUtility Stuffs
