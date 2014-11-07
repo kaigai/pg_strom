@@ -52,6 +52,7 @@ typedef struct
 	List		   *used_params;	/* referenced Const/Param */
 	Bitmapset	   *outer_attrefs;	/* bitmap of referenced outer attributes */
 	Bitmapset	   *tlist_attrefs;	/* bitmap of referenced tlist attributes */
+	bool			has_numeric;	/* if true, result contains numeric val */
 } GpuPreAggPlan;
 
 typedef struct
@@ -71,6 +72,8 @@ typedef struct
 	Datum			dprog_key;
 	kern_parambuf  *kparams;
 	bool			needs_grouping;
+
+	bool			has_numeric;
 
 	pgstrom_gpupreagg  *curr_chunk;
 	cl_uint			curr_index;
@@ -138,26 +141,33 @@ static aggfunc_catalog_t  aggfunc_catalog[] = {
 	  "s:avg",  2, {INT4OID, FLOAT8OID},
 	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}
 	},
+	{ "avg",	1, {NUMERICOID},
+	  "s:avg",	2, {INT4OID, NUMERICOID},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}
+	},
 	/* COUNT(*) = SUM(NROWS(*|X)) */
-	{ "count", 0, {},       "c:sum", 1, {INT4OID}, {ALTFUNC_EXPR_NROWS}},
-	{ "count", 1, {ANYOID}, "c:sum", 1, {INT4OID}, {ALTFUNC_EXPR_NROWS}},
+	{ "count", 0, {},        "c:sum", 1, {INT4OID},   {ALTFUNC_EXPR_NROWS}},
+	{ "count", 1, {ANYOID},  "c:sum", 1, {INT4OID},   {ALTFUNC_EXPR_NROWS}},
 	/* MAX(X) = MAX(PMAX(X)) */
 	{ "max", 1, {INT2OID},   "c:max", 1, {INT2OID},   {ALTFUNC_EXPR_PMAX}},
 	{ "max", 1, {INT4OID},   "c:max", 1, {INT4OID},   {ALTFUNC_EXPR_PMAX}},
 	{ "max", 1, {INT8OID},   "c:max", 1, {INT8OID},   {ALTFUNC_EXPR_PMAX}},
 	{ "max", 1, {FLOAT4OID}, "c:max", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PMAX}},
 	{ "max", 1, {FLOAT8OID}, "c:max", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PMAX}},
+	{ "max", 1, {NUMERICOID},"c:max", 1, {NUMERICOID},{ALTFUNC_EXPR_PMAX}},
 	/* MIX(X) = MIN(PMIN(X)) */
 	{ "min", 1, {INT2OID},   "c:min", 1, {INT2OID},   {ALTFUNC_EXPR_PMIN}},
 	{ "min", 1, {INT4OID},   "c:min", 1, {INT4OID},   {ALTFUNC_EXPR_PMIN}},
 	{ "min", 1, {INT8OID},   "c:min", 1, {INT8OID},   {ALTFUNC_EXPR_PMIN}},
 	{ "min", 1, {FLOAT4OID}, "c:min", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PMIN}},
 	{ "min", 1, {FLOAT8OID}, "c:min", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PMIN}},
+	{ "min", 1, {NUMERICOID},"c:min", 1, {NUMERICOID},{ALTFUNC_EXPR_PMIN}},
 	/* SUM(X) = SUM(PSUM(X)) */
 	{ "sum", 1, {INT2OID},   "s:sum", 1, {INT8OID},   {ALTFUNC_EXPR_PSUM}},
 	{ "sum", 1, {INT4OID},   "s:sum", 1, {INT8OID},   {ALTFUNC_EXPR_PSUM}},
 	{ "sum", 1, {FLOAT4OID}, "c:sum", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PSUM}},
 	{ "sum", 1, {FLOAT8OID}, "c:sum", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PSUM}},
+	{ "sum", 1, {NUMERICOID},"s:sum", 1, {NUMERICOID},{ALTFUNC_EXPR_PSUM}},
 	/* STDDEV(X) = EX_STDDEV(NROWS(),PSUM(X),PSUM(X*X)) */
 	{ "stddev", 1, {FLOAT4OID},
 	  "s:stddev", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
@@ -283,10 +293,6 @@ aggfunc_lookup_by_oid(Oid aggfnoid)
 	ReleaseSysCache(htup);
 	return NULL;
 }
-
-
-
-
 
 /*
  * cost_gpupreagg
@@ -969,7 +975,8 @@ gpupreagg_rewrite_expr(Agg *agg,
 					   List **p_agg_tlist,
 					   List **p_agg_quals,
 					   List **p_pre_tlist,
-					   Bitmapset **p_attr_refs)
+					   Bitmapset **p_attr_refs,
+					   bool *p_has_numeric)
 {
 	gpupreagg_rewrite_context context;
 	Plan	   *outer_plan = outerPlan(agg);
@@ -977,6 +984,7 @@ gpupreagg_rewrite_expr(Agg *agg,
 	List	   *agg_tlist = NIL;
 	List	   *agg_quals = NIL;
 	Bitmapset  *attr_refs = NULL;
+	bool		has_numeric = false;
 	ListCell   *cell;
 	int			i;
 
@@ -1019,6 +1027,9 @@ gpupreagg_rewrite_expr(Agg *agg,
 			if (!OidIsValid(dtype->type_cmpfunc) ||
 				!pgstrom_devfunc_lookup(dtype->type_cmpfunc))
 				return false;
+			/* check types that needs special treatment */
+			if (type_oid == NUMERICOID)
+				has_numeric = true;
 
 			var = (Expr *) makeVar(OUTER_VAR,
 								   tle->resno,
@@ -1065,6 +1076,8 @@ gpupreagg_rewrite_expr(Agg *agg,
 														 &context);
 		if (context.gpupreagg_invalid)
 			return false;
+		if (exprType((Node *)newtle->expr) == NUMERICOID)
+			has_numeric = true;
 		agg_tlist = lappend(agg_tlist, newtle);
 	}
 
@@ -1077,12 +1090,15 @@ gpupreagg_rewrite_expr(Agg *agg,
 													 &context);
 		if (context.gpupreagg_invalid)
 			return false;
+		if (exprType((Node *)new_expr) == NUMERICOID)
+			has_numeric = true;
 		agg_quals = lappend(agg_quals, new_expr);
 	}
 	*p_pre_tlist = context.pre_tlist;
 	*p_agg_tlist = agg_tlist;
 	*p_agg_quals = agg_quals;
 	*p_attr_refs = context.attr_refs;
+	*p_has_numeric = has_numeric;
 	return true;
 }
 
@@ -1875,6 +1891,7 @@ pgstrom_try_insert_gpupreagg(PlannedStmt *pstmt, Agg *agg)
 	List		   *agg_quals = NIL;
 	List		   *agg_tlist = NIL;
 	Bitmapset	   *attr_refs = NULL;
+	bool			has_numeric = false;
 	ListCell	   *cell;
 	Cost			startup_cost;
 	Cost			total_cost;
@@ -1895,7 +1912,8 @@ pgstrom_try_insert_gpupreagg(PlannedStmt *pstmt, Agg *agg)
 								&agg_tlist,
 								&agg_quals,
 								&pre_tlist,
-								&attr_refs))
+								&attr_refs,
+								&has_numeric))
 		return;
 
 	/*
@@ -1965,6 +1983,7 @@ pgstrom_try_insert_gpupreagg(PlannedStmt *pstmt, Agg *agg)
 			bms_add_member(gpreagg->tlist_attrefs, tle->resno -
 						   FirstLowInvalidHeapAttributeNumber);
 	}
+	gpreagg->has_numeric = has_numeric;
 
 	/* OK, inject it */
 	agg->plan.startup_cost = startup_cost;
@@ -2091,6 +2110,7 @@ gpupreagg_begin(CustomPlan *node, EState *estate, int eflags)
 	 * init misc stuff
 	 */
 	gpas->needs_grouping = (gpreagg->numCols > 0);
+	gpas->has_numeric = gpreagg->has_numeric;
 	gpas->curr_chunk = NULL;
 	gpas->curr_index = 0;
 	gpas->curr_recheck = false;
@@ -2403,6 +2423,31 @@ gpupreagg_next_tuple(GpuPreAggState *gpas)
 									  gpas->curr_index++,
 									  &tuple))
 			slot = NULL;
+		else if (gpas->has_numeric)
+		{
+			TupleDesc	tupdesc = slot->tts_tupleDescriptor;
+			int			i;
+
+			/*
+			 * We have to fixup numeric values from the in-kernel format
+			 * to PostgreSQL's internal format.
+			 */
+			slot_getallattrs(slot);
+			for (i=0; i < tupdesc->natts; i++)
+			{
+				Form_pg_attribute	attr = tupdesc->attrs[i];
+
+				if (attr->atttypid != NUMERICOID || slot->tts_isnull[i])
+					continue;	/* no need to fixup */
+
+				slot->tts_values[i] =
+					pgstrom_fixup_kernel_numeric(slot->tts_values[i]);
+			}
+			/* Now we expect GpuPreAgg takes KDS_FORMAT_TUPSLOT for result
+			 * buffer, it should not have tts_tuple to be fixed up too.
+			 */
+			Assert(!slot->tts_tuple);
+		}
 	}
 
 	if (gpas->pfm.enabled)
@@ -4191,7 +4236,7 @@ typedef struct NumericAggState
 } NumericAggState;
 
 Datum
-pgstrom_avg_numeric_accum(PG_FUNCTION_ARGS)
+pgstrom_int8_avg_accum(PG_FUNCTION_ARGS)
 {
 	int32	nrows = PG_GETARG_INT32(1);
 	Datum	datum;
@@ -4213,7 +4258,32 @@ pgstrom_avg_numeric_accum(PG_FUNCTION_ARGS)
 		state->N += nrows - 1;
 	PG_RETURN_POINTER(state);
 }
-PG_FUNCTION_INFO_V1(pgstrom_avg_numeric_accum);
+PG_FUNCTION_INFO_V1(pgstrom_int8_avg_accum);
+
+Datum
+pgstrom_numeric_avg_accum(PG_FUNCTION_ARGS)
+{
+	int32	nrows = PG_GETARG_INT32(1);
+	Datum	datum;
+	NumericAggState *state;
+
+	/* nrows should be a valid non-negative input */
+	if (PG_ARGISNULL(1) || nrows < 0)
+		elog(ERROR, "Bug? NULL or negative nrows was given");
+
+	/* adjust argument */
+	fcinfo->nargs		= 2;
+	fcinfo->arg[1]		= fcinfo->arg[2];
+	fcinfo->argnull[1]	= fcinfo->argnull[2];
+
+	datum = numeric_avg_accum(fcinfo);
+
+	state = (NumericAggState *) DatumGetPointer(datum);
+	if (state && nrows > 0)
+		state->N += nrows - 1;
+	PG_RETURN_POINTER(state);
+}
+PG_FUNCTION_INFO_V1(pgstrom_numeric_avg_accum);
 
 /* logic copied from utils/adt/float.c */
 static inline float8 *

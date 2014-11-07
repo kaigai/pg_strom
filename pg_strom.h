@@ -441,6 +441,7 @@ extern void pgstrom_init_codegen(void);
 extern kern_parambuf *
 pgstrom_create_kern_parambuf(List *used_params,
                              ExprContext *econtext);
+extern Datum pgstrom_fixup_kernel_numeric(Datum numeric_datum);
 extern bool pgstrom_fetch_data_store(TupleTableSlot *slot,
 									 pgstrom_data_store *pds,
 									 size_t row_index,
@@ -549,7 +550,8 @@ extern Datum gpupreagg_corr_psum_xy(PG_FUNCTION_ARGS);
 extern Datum pgstrom_avg_int8_accum(PG_FUNCTION_ARGS);
 extern Datum pgstrom_sum_int8_accum(PG_FUNCTION_ARGS);
 extern Datum pgstrom_sum_int8_final(PG_FUNCTION_ARGS);
-extern Datum pgstrom_avg_numeric_accum(PG_FUNCTION_ARGS);
+extern Datum pgstrom_int8_avg_accum(PG_FUNCTION_ARGS);
+extern Datum pgstrom_numeric_avg_accum(PG_FUNCTION_ARGS);
 extern Datum pgstrom_sum_float8_accum(PG_FUNCTION_ARGS);
 extern Datum pgstrom_variance_float8_accum(PG_FUNCTION_ARGS);
 extern Datum pgstrom_covariance_float8_accum(PG_FUNCTION_ARGS);

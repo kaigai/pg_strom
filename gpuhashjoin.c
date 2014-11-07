@@ -2758,6 +2758,9 @@ pgstrom_fetch_gpuhashjoin(GpuHashJoinState *ghjs,
 	pgstrom_gpuhashjoin *ghjoin;
 	dlist_node			*dnode;
 
+#if 0
+	// Is it really needed to dequeue it first?
+
 	/*
 	 * Dequeue the running gpuhashjoin chunk being already processed
 	 */
@@ -2767,7 +2770,7 @@ pgstrom_fetch_gpuhashjoin(GpuHashJoinState *ghjs,
 		ghjs->num_running--;
 		dlist_push_tail(&ghjs->ready_pscans, &msg->chain);
 	}
-
+#endif
 	/*
 	 * Keep number of asynchronous hashjoin request a particular level,
 	 * unless it does not exceed pgstrom_max_async_chunks and any new

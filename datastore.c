@@ -23,6 +23,7 @@
 #include "utils/rel.h"
 #include "utils/tqual.h"
 #include "pg_strom.h"
+#include "opencl_numeric.h"
 
 /*
  * pgstrom_create_param_buffer
@@ -138,6 +139,21 @@ pgstrom_create_kern_parambuf(List *used_params,
 	kpbuf->nparams = nparams;
 
 	return kpbuf;
+}
+
+Datum
+pgstrom_fixup_kernel_numeric(Datum datum)
+{
+	cl_ulong	numeric_value = (cl_ulong) datum;
+	bool		sign = PG_NUMERIC_SIGN(numeric_value);
+	int			expo = PG_NUMERIC_EXPONENT(numeric_value);
+	cl_ulong	mantissa = PG_NUMERIC_MANTISSA(numeric_value);
+	char		temp[100];
+
+	/* more effective implementation in the future :-) */
+	snprintf(temp, sizeof(temp), "%c%lue%d",
+			 sign ? '-' : '+', mantissa, expo);
+	return DirectFunctionCall1(numeric_in, CStringGetDatum(temp));
 }
 
 bool

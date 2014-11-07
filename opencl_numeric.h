@@ -31,6 +31,8 @@ typedef struct {
 	bool		isnull;
 } pg_numeric_t;
 
+#endif	/* OPENCL_DEVICE_CODE */
+
 #define PG_NUMERIC_SIGN_MASK		0x0200000000000000UL
 #define PG_NUMERIC_MANTISSA_MASK	0x01ffffffffffffffUL
 #define PG_NUMERIC_EXPONENT_OFFSET	32
@@ -38,12 +40,13 @@ typedef struct {
 #define PG_NUMERIC_EXPONENT(num)	\
 	((int)((num) >> 58) - PG_NUMERIC_EXPONENT_OFFSET)
 #define PG_NUMERIC_SIGN(num)		(((num) & PG_NUMERIC_SIGN_MASK) != 0)
-#define PG_NUMERIC_MANTISSA(num)	(((num) & PG_NUMERIC_MANTISSA_MASK)
+#define PG_NUMERIC_MANTISSA(num)	((num) & PG_NUMERIC_MANTISSA_MASK)
 #define PG_NUMERIC_SET(expo,sign,mant)							\
 	(((cl_ulong)(expo + PG_NUMERIC_EXPONENT_OFFSET) << 58) |	\
 	 ((sign) != 0 ? PG_NUMERIC_SIGN_MASK : 0UL) |				\
 	 ((mant) & PG_NUMERIC_MANTISSA_MASK))
 
+#ifdef OPENCL_DEVICE_CODE
 static pg_numeric_t
 pg_numeric_from_varlena(__private int *errcode, __global varlena *vl_val)
 {
@@ -71,6 +74,9 @@ pg_numeric_vref(__global kern_data_store *kds,
 
 	return pg_numeric_from_varlena(errcode, vl_val);
 }
+
+/* pg_numeric_vstore() is same as template */
+STROMCL_SIMPLE_VARSTORE_TEMPLATE(numeric, cl_ulong)
 
 static pg_numeric_t
 pg_numeric_param(__global kern_parambuf *kparams,

@@ -965,6 +965,13 @@ pgstrom_fetch_gpuscan(GpuScanState *gss)
 	/* A valid device code shall have message queue */
 	Assert(gss->mqueue != NULL);
 
+#if 0
+	/*
+	 * Dequeuing may cause overconsumption of shared memory by chunks
+	 * being processed but not referenced yet are not counted by
+	 * pgstrom_max_async_chunks
+	 */
+
 	/* Dequeue current gpuscan chunks being already processed */
 	while ((msg = pgstrom_try_dequeue_message(gss->mqueue)) != NULL)
 	{
@@ -972,6 +979,7 @@ pgstrom_fetch_gpuscan(GpuScanState *gss)
 		gss->num_running--;
 		dlist_push_tail(&gss->ready_chunks, &msg->chain);
 	}
+#endif
 
 	/*
 	 * Try to keep number of gpuscan chunks being asynchronously executed

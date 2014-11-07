@@ -210,9 +210,8 @@ CREATE FUNCTION pgstrom.pcov_xy(bool, float8, float8)
   LANGUAGE C CALLED ON NULL INPUT;
 
 
-
 --
--- definition of trans/final functioin of alternative aggregates
+-- Partial aggregate function for int2/int4 data types
 --
 CREATE FUNCTION pgstrom.avg_int8_accum(int8[], int4, int8)
   RETURNS int8[]
@@ -245,18 +244,26 @@ CREATE AGGREGATE pgstrom.sum(int8)
   initcond = '{0,0}'
 );
 
-CREATE FUNCTION pgstrom.avg_numeric_accum(internal, int4, int8)
+--
+-- Partial aggregates for int8 data type
+-- (it keeps internal state using numeric, the function name might
+--  be misleading...)
+--
+CREATE FUNCTION pgstrom.int8_avg_accum(internal, int4, int8)
   RETURNS internal
-  AS 'MODULE_PATHNAME', 'pgstrom_avg_numeric_accum'
+  AS 'MODULE_PATHNAME', 'pgstrom_int8_avg_accum'
   LANGUAGE C CALLED ON NULL INPUT;
 
 CREATE AGGREGATE pgstrom.avg_numeric(int4, int8)
 (
-  sfunc = pgstrom.avg_numeric_accum,
+  sfunc = pgstrom.int8_avg_accum,
   stype = internal,
   finalfunc = pg_catalog.numeric_avg
 );
 
+--
+-- Partial aggregates for real/float data type
+--
 CREATE FUNCTION pgstrom.sum_float8_accum(float8[], int4, float8)
   RETURNS float8[]
   AS 'MODULE_PATHNAME', 'pgstrom_sum_float8_accum'
@@ -270,6 +277,31 @@ CREATE AGGREGATE pgstrom.avg(int4, float8)
   initcond = "{0,0,0}"
 );
 
+--
+-- Partial aggregate for numeric data type
+--
+CREATE FUNCTION pgstrom.numeric_avg_accum(internal, int4, numeric)
+  RETURNS internal
+  AS 'MODULE_PATHNAME', 'pgstrom_numeric_avg_accum'
+  LANGUAGE C STRICT;
+
+CREATE AGGREGATE pgstrom.sum(int4, numeric)
+(
+  sfunc = pgstrom.numeric_avg_accum,
+  stype = internal,
+  finalfunc = pg_catalog.numeric_sum
+);
+
+CREATE AGGREGATE pgstrom.avg(int4, numeric)
+(
+  sfunc = pgstrom.numeric_avg_accum,
+  stype = internal,
+  finalfunc = pg_catalog.numeric_avg
+);
+
+--
+-- PreAgg functions for standard diviation / variance
+--
 CREATE FUNCTION pgstrom.variance_float8_accum(float8[], int4, float8, float8)
   RETURNS float8[]
   AS 'MODULE_PATHNAME', 'pgstrom_variance_float8_accum'
@@ -323,6 +355,9 @@ CREATE AGGREGATE pgstrom.var_pop(int4, float8, float8)
   initcond = '{0,0,0}'
 );
 
+--
+-- PreAgg functions for covariance (with float8)
+--
 CREATE FUNCTION pgstrom.covariance_float8_accum(float8[], int4, float8, float8,
                                                 float8, float8, float8)
   RETURNS float8[]
