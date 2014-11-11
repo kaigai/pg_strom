@@ -20,6 +20,9 @@
 #ifdef OPENCL_DEVICE_CODE
 
 
+#define CL_CHAR_BIT			8
+
+
 /* PostgreSQL numeric data type */
 #if 0
 #define PG_DEC_DIGITS		1
@@ -40,26 +43,27 @@ typedef cl_short	NumericDigit;
 #endif
 
 #define PG_MAX_DIGITS		18	/* Max digits of 57 bit mantissa. */
-#define PG_MAX_DATA			((PG_MAX_DIGITS + PG_DEC_DIGITS - 1) / PG_DEC_DIGITS)
+#define PG_MAX_DATA			((PG_MAX_DIGITS + PG_DEC_DIGITS - 1) / \
+							 PG_DEC_DIGITS)
 
 struct NumericShort
 {
-	cl_ushort			n_header;				/* Sign + display scale + weight */
-	NumericDigit		n_data[PG_MAX_DATA];	/* Digits */
+	cl_ushort		n_header;				/* Sign + display scale + weight */
+	NumericDigit	n_data[PG_MAX_DATA];	/* Digits */
 };
 
 struct NumericLong
 {
-	cl_ushort			n_sign_dscale;			/* Sign + display scale */
-	cl_short			n_weight;				/* Weight of 1st digit	*/
-	NumericDigit		n_data[PG_MAX_DATA];	/* Digits */
+	cl_ushort		n_sign_dscale;			/* Sign + display scale */
+	cl_short		n_weight;				/* Weight of 1st digit	*/
+	NumericDigit	n_data[PG_MAX_DATA];	/* Digits */
 };
 
 union NumericChoice
 {
-	cl_ushort			n_header;				/* Header word */
-	struct NumericLong	n_long;					/* Long form (4-byte header) */
-	struct NumericShort	n_short;				/* Short form (2-byte header) */
+	cl_ushort			n_header;			/* Header word */
+	struct NumericLong	n_long;				/* Long form (4-byte header) */
+	struct NumericShort	n_short;			/* Short form (2-byte header) */
 };
 
 // struct NumericData
@@ -82,7 +86,8 @@ union NumericChoice
 #define NUMERIC_SHORT_SIGN_MASK			0x2000
 #define NUMERIC_SHORT_DSCALE_MASK		0x1F80
 #define NUMERIC_SHORT_DSCALE_SHIFT		7
-#define NUMERIC_SHORT_DSCALE_MAX		(NUMERIC_SHORT_DSCALE_MASK >> NUMERIC_SHORT_DSCALE_SHIFT)
+#define NUMERIC_SHORT_DSCALE_MAX		(NUMERIC_SHORT_DSCALE_MASK >> \
+										 NUMERIC_SHORT_DSCALE_SHIFT)
 #define NUMERIC_SHORT_WEIGHT_SIGN_MASK	0x0040
 #define NUMERIC_SHORT_WEIGHT_MASK		0x003F
 #define NUMERIC_SHORT_WEIGHT_MAX		NUMERIC_SHORT_WEIGHT_MASK
@@ -185,7 +190,7 @@ pg_numeric_from_varlena(__private int *errcode, __global varlena *vl_val)
 	}
 
 	// Once data copy to private memory for alignment.
-//	memcpy(&numData, pSrc, len);
+    // memcpy(&numData, pSrc, len);
 	{
 		// OpenCL memcpy does not support private memory.
 		__private cl_char *dst = (__private cl_char *) &numData;
@@ -197,16 +202,17 @@ pg_numeric_from_varlena(__private int *errcode, __global varlena *vl_val)
 
 	// Convert PG-Strom numeric type from PostgreSQL numeric type.
 	{
-		int		     sign	  = NUMERIC_SIGN(&numData);
+		int		     sign	 = NUMERIC_SIGN(&numData);
 		int		     expo;
 		cl_ulong     mant;
 		int 	     weight  = NUMERIC_WEIGHT(&numData);
 //		int		     dscale  = NUMERIC_DSCALE(&numData);
 		NumericDigit *digits = NUMERIC_DIGITS(&numData);
-		int 	     ndigits = (len - ((unsigned long)digits - (unsigned long)&numData)) / sizeof(NumericDigit);
+		int			 offset  = (unsigned long)digits - (unsigned long)&numData;
+		int 	     ndigits = (len - offset) / sizeof(NumericDigit);
 
-		int			i, base;
-		cl_ulong	mantLast;
+		int			 i, base;
+		cl_ulong	 mantLast;
 
 
 		// Numeric value is 0, if ndigits is 0. 
@@ -276,7 +282,8 @@ pg_numeric_from_varlena(__private int *errcode, __global varlena *vl_val)
 		}
 
 		// Error check
-		if (expo < PG_NUMERIC_EXPONENT_MIN  ||  PG_NUMERIC_EXPONENT_MAX < expo  ||  (mant & ~PG_NUMERIC_MANTISSA_MASK)) {
+		if (expo < PG_NUMERIC_EXPONENT_MIN || PG_NUMERIC_EXPONENT_MAX < expo ||
+			(mant & ~PG_NUMERIC_MANTISSA_MASK)) {
 			result.isnull = true;
 			result.value  = 0;
 			*errcode = StromError_CpuReCheck;
@@ -396,196 +403,73 @@ STROMCL_SIMPLE_TYPE_TEMPLATE(float8, cl_double)
 
 
 
-static pg_int2_t
-pgfn_numeric_int2(__private int *errcode, pg_numeric_t arg)
-{
-	pg_int2_t	v;
-
-	if (arg.isnull == true) {
-		v.isnull = true;
-		v.value  = 0;
-
-	} else {
-		int	     expo = PG_NUMERIC_EXPONENT(arg.value);
-		int		 sign = PG_NUMERIC_SIGN(arg.value);
-		cl_ulong mant = PG_NUMERIC_MANTISSA(arg.value);
-
-		if (mant == 0) {
-			v.isnull = false;
-			v.value  = PG_NUMERIC_SET(0, 0, 0);
-
-		} else {
-			int exp = abs(expo);
-
-			int mag, i;
-			for(i=0, mag=1; i<exp; i++) {
-				mag *= 10;
-			}
-
-			if (expo < 0) {
-				// Round off if exponent is minus.
-				mant = (mant + mag/2) / mag;
-
-			} else {
-				cl_ulong tmp = mant * mag;
-
-				// Overflow check
-				if ((mant * mag) / mag != mant) {
-					v.isnull = true;
-					v.value  = 0;
-					*errcode = StromError_CpuReCheck;
-					return v;
-				}
-
-				mant *= mag;
-			}
-
-			// Overflow check
-			if((sign == 0 && SHRT_MAX < mant) || (sign != 0 && (-SHRT_MIN) < mant)) {
-				v.isnull = true;
-				v.value  = 0;
-				*errcode = StromError_CpuReCheck;
-				return v;
-			}
-
-			v.isnull = false;
-			v.value  = (sign == 0) ? mant : (-mant);
-		}
-	}
-
-	return v;
-}
-
-
-
-static pg_int4_t
-pgfn_numeric_int4(__private int *errcode, pg_numeric_t arg)
-{
-	pg_int4_t	v;
-
-	if (arg.isnull == true) {
-		v.isnull = true;
-		v.value  = 0;
-
-	} else {
-		int	     expo = PG_NUMERIC_EXPONENT(arg.value);
-		int		 sign = PG_NUMERIC_SIGN(arg.value);
-		cl_ulong mant = PG_NUMERIC_MANTISSA(arg.value);
-
-		if (mant == 0) {
-			v.isnull = false;
-			v.value  = PG_NUMERIC_SET(0, 0, 0);
-
-		} else {
-			int exp = abs(expo);
-
-			int mag, i;
-			for(i=0, mag=1; i<exp; i++) {
-				mag *= 10;
-			}
-
-			if (expo < 0) {
-				// Round off if exponent is minus.
-				mant = (mant + mag/2) / mag;
-
-			} else {
-				cl_ulong tmp = mant * mag;
-
-				// Overflow check
-				if ((mant * mag) / mag != mant) {
-					v.isnull = true;
-					v.value  = 0;
-					*errcode = StromError_CpuReCheck;
-					return v;
-				}
-
-				mant *= mag;
-			}
-
-			// Overflow check
-			if((sign == 0 && INT_MAX < mant) || (sign != 0 && (-INT_MIN) < mant)) {
-				v.isnull = true;
-				v.value  = 0;
-				*errcode = StromError_CpuReCheck;
-				return v;
-			}
-
-			v.isnull = false;
-			v.value  = (sign == 0) ? mant : (-mant);
-		}
-	}
-
-	return v;
-}
-
-
-
 static pg_int8_t
-pgfn_numeric_int8(__private int *errcode, pg_numeric_t arg)
+numeric_to_integer(__private int *errcode, pg_numeric_t arg, cl_int size)
 {
 	pg_int8_t	v;
 
+
 	if (arg.isnull == true) {
 		v.isnull = true;
 		v.value  = 0;
+		return v;
+	}
+
+	int	     expo = PG_NUMERIC_EXPONENT(arg.value);
+	int		 sign = PG_NUMERIC_SIGN(arg.value);
+	cl_ulong mant = PG_NUMERIC_MANTISSA(arg.value);
+	
+	if (mant == 0) {
+		v.isnull = false;
+		v.value  = 0;
+	}
+
+	int exp = abs(expo);
+	int mag = 1;
+	for(int i=0; i<exp; i++) {
+		mag *= 10;
+	}
+
+	if (expo < 0) {
+		// Round off if exponent is minus.
+		mant = (mant + mag/2) / mag;
 
 	} else {
-		int	     expo = PG_NUMERIC_EXPONENT(arg.value);
-		int		 sign = PG_NUMERIC_SIGN(arg.value);
-		cl_ulong mant = PG_NUMERIC_MANTISSA(arg.value);
-
-		if (mant == 0) {
-			v.isnull = false;
-			v.value  = PG_NUMERIC_SET(0, 0, 0);
-
-		} else {
-			int exp = abs(expo);
-
-			int mag, i;
-			for(i=0, mag=1; i<exp; i++) {
-				mag *= 10;
-			}
-
-			if (expo < 0) {
-				// Round off if exponent is minus.
-				mant = (mant + mag/2) / mag;
-
-			} else {
-				cl_ulong tmp = mant * mag;
-
-				// Overflow check
-				if ((mant * mag) / mag != mant) {
-					v.isnull = true;
-					v.value  = 0;
-					*errcode = StromError_CpuReCheck;
-					return v;
-				}
-
-				mant *= mag;
-			}
-
-			// Overflow check
-			if((sign == 0 && LONG_MAX < mant) || (sign != 0 && (-LONG_MIN) < mant)) {
-				v.isnull = true;
-				v.value  = 0;
-				*errcode = StromError_CpuReCheck;
-				return v;
-			}
-
-			v.isnull = false;
-			v.value  = (sign == 0) ? mant : (-mant);
+		// Overflow check
+		if ((mant * mag) / mag != mant) {
+			v.isnull = true;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
 		}
+
+		mant *= mag;
 	}
+
+	// Overflow check
+	int      nbits       = size * CL_CHAR_BIT;
+	cl_ulong max_val     = (1 << (nbits - 1)) - 1;
+	cl_ulong abs_min_val = (1 << (nbits - 1));
+	if((sign == 0 && max_val < mant) || (sign != 0 && abs_min_val < mant)) {
+		v.isnull = true;
+		v.value  = 0;
+		*errcode = StromError_CpuReCheck;
+		return v;
+	}
+
+	v.isnull = false;
+	v.value  = (sign == 0) ? mant : (-mant);
 
 	return v;
 }
 
 
 
-static pg_float4_t
-pgfn_numeric_float4(__private int *errcode, pg_numeric_t arg)
+static pg_float8_t
+numeric_to_float(__private int *errcode, pg_numeric_t arg)
 {
-	pg_float4_t	v;
+	pg_float8_t	v;
+
 
 	if (arg.isnull == true) {
 		v.isnull = true;
@@ -603,18 +487,18 @@ pgfn_numeric_float4(__private int *errcode, pg_numeric_t arg)
 		} else {
 			int exp = abs(expo);
 
-			int 	mag, i;
-			float	fvalue;
+			int			mag, i;
+			cl_double	fvalue;
 
 			for(i=0, mag=1; i<exp; i++) {
 				mag *= 10;
 			}
 
 			if (expo < 0) {
-				fvalue = (float)mant / mag;
+				fvalue = (cl_double)mant / mag;
 
 			} else {
-				fvalue = (float)mant * mag;
+				fvalue = (cl_double)mant * mag;
 				if (isinf(fvalue)) {
 					v.isnull = true;
 					v.value  = 0;
@@ -625,6 +509,61 @@ pgfn_numeric_float4(__private int *errcode, pg_numeric_t arg)
 
 			v.value  = (sign == 0) ? fvalue : (-fvalue);
 		}
+	}
+
+	return v;
+}
+
+
+
+static pg_int2_t
+pgfn_numeric_int2(__private int *errcode, pg_numeric_t arg)
+{
+	pg_int2_t v;
+	pg_int8_t tmp = numeric_to_integer(errcode, arg, sizeof(v.value));
+
+	v.isnull = tmp.isnull;
+	v.value  = tmp.value;
+
+	return v;
+}
+
+
+
+static pg_int4_t
+pgfn_numeric_int4(__private int *errcode, pg_numeric_t arg)
+{
+	pg_int4_t v;
+	pg_int8_t tmp = numeric_to_integer(errcode, arg, sizeof(v.value));
+
+	v.isnull = tmp.isnull;
+	v.value  = tmp.value;
+
+	return v;
+}
+
+
+
+static pg_int8_t
+pgfn_numeric_int8(__private int *errcode, pg_numeric_t arg)
+{
+	pg_int8_t v;
+	return numeric_to_integer(errcode, arg, sizeof(v.value));
+}
+
+
+
+static pg_float4_t
+pgfn_numeric_float4(__private int *errcode, pg_numeric_t arg)
+{
+
+	pg_float8_t tmp = numeric_to_float(errcode, arg);
+	pg_float4_t	v   = { tmp.isnull, (cl_float)tmp.value };
+
+	if (v.isnull == false  &&  isinf(tmp.value)) {
+		tmp.isnull	= true;
+		tmp.value	= 0;
+		*errcode	= StromError_CpuReCheck;
 	}
 
 	return v;
@@ -635,60 +574,72 @@ pgfn_numeric_float4(__private int *errcode, pg_numeric_t arg)
 static pg_float8_t
 pgfn_numeric_float8(__private int *errcode, pg_numeric_t arg)
 {
-	pg_float8_t	v;
+	return numeric_to_float(errcode, arg);
+}
 
-	if (arg.isnull == true) {
+
+
+static pg_numeric_t
+integer_to_numeric(__private int *errcode, pg_int8_t arg, cl_int size)
+{
+	pg_numeric_t	v;
+	int				sign;
+	int				expo;
+	cl_ulong		mant;
+
+
+	if (arg.isnull) {
 		v.isnull = true;
 		v.value  = 0;
+		return v;
+	}
+		
+	if (arg.value == 0) {
+		v.isnull = false;
+		v.value  = PG_NUMERIC_SET(0, 0, 0);
+		return v;
+	}
 
+	if (0 <= arg.value) {
+		sign = 0;
+		mant = arg.value;
 	} else {
-		int		 expo = PG_NUMERIC_EXPONENT(arg.value);
-		int		 sign = PG_NUMERIC_SIGN(arg.value);
-		cl_ulong mant = PG_NUMERIC_MANTISSA(arg.value);
+		sign = 1;
+		mant = -arg.value;
+	}
 
-		if (mant == 0) {
-			v.isnull = false;
-			v.value  = PG_NUMERIC_SET(0, 0, 0);
+	// Normalize
+	while (mant % 10 == 0  &&  expo < PG_NUMERIC_EXPONENT_MAX) {
+		mant /= 10;
+		expo ++;
+	}
 
-		} else {
-			int exp = abs(expo);
-
-			int 	mag, i;
-			double	fvalue;
-
-			for(i=0, mag=1; i<exp; i++) {
-				mag *= 10;
-			}
-
-			if (expo < 0) {
-				fvalue = (double)mant / mag;
-
-			} else {
-				fvalue = (double)mant * mag;
-				if (isinf(fvalue)) {
-					v.isnull = true;
-					v.value  = 0;
-					*errcode = StromError_CpuReCheck;
-					return v;
-				}
-			}
-
-			v.value  = (sign == 0) ? fvalue : (-fvalue);
+	if(PG_NUMERIC_MANTISSA_BITS < size * CL_CHAR_BIT - 1) {
+		// Error check
+		if (mant & ~PG_NUMERIC_MANTISSA_MASK) {
+			v.isnull = true;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
 		}
 	}
 
+	v.isnull = false;
+	v.value  = PG_NUMERIC_SET(expo, sign, mant);
+
 	return v;
 }
 
 
 
 static pg_numeric_t
-pgfn_int2_numeric(__private int *errcode, pg_int2_t arg)
+float_to_numeric(__private int *errcode, pg_float8_t arg)
 {
 	pg_numeric_t	v;
 	int				sign;
 	int				expo;
 	cl_ulong		mant;
+	cl_double		fval, finteger, fdecimal;
 
 
 	if (arg.isnull) {
@@ -696,25 +647,94 @@ pgfn_int2_numeric(__private int *errcode, pg_int2_t arg)
 		v.value  = 0;
 		return v;
 	}
+
+	if(isnan(arg.value)) {
+		v.isnull = true;
+		v.value  = 0;
+		*errcode = StromError_CpuReCheck;
+		return v;
+	}
 		
-	if (arg.value == 0) {
-		v.isnull = false;
-		v.value  = PG_NUMERIC_SET(0, 0, 0);
+	if(isinf(arg.value)) {
+		v.isnull = true;
+		v.value  = 0;
+		*errcode = StromError_CpuReCheck;
 		return v;
 	}
 
+
 	if (0 <= arg.value) {
 		sign = 0;
-		mant = arg.value;
+		fval = arg.value;
 	} else {
 		sign = 1;
-		mant = -arg.value;
+		fval = -arg.value;
 	}
 
-	// Normalize
-	while (mant % 10 == 0  &&  expo < PG_NUMERIC_EXPONENT_MAX) {
-		mant /= 10;
-		expo ++;
+	finteger = floor(fval);
+	fdecimal = fval - finteger;
+
+	if (fdecimal != 0.0f) {
+		// Convert decimal
+
+		// Integer value is overflow
+		if (PG_NUMERIC_MANTISSA_MAX < finteger) {
+			v.isnull = true;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
+		}
+
+		expo = 0;
+		mant = finteger;
+		while (fdecimal != 0.0f) {
+			cl_double fdecimal10 = fdecimal * 10.0f;
+
+			mant = mant * 10 + (int)fdecimal10;
+			expo ++;
+
+			// Mantissa is too large
+			if ((mant & ~PG_NUMERIC_MANTISSA_MASK) != 0) {
+				v.isnull = true;
+				v.value  = 0;
+				*errcode = StromError_CpuReCheck;
+				return v;
+			}
+			
+			fdecimal = fdecimal10 - floor(fdecimal10);
+		}
+
+	} else {
+		// Convert big integer
+
+		// Normalize
+		expo = 0;
+		for (;;) {
+			cl_double finteger10 = finteger / 10.0f;
+			if (floor(finteger10) != finteger10) {
+				break;
+			}
+			finteger = finteger10;
+			expo ++;
+		}
+
+		// Mantissa is too large
+		if (PG_NUMERIC_MANTISSA_MAX < finteger) {
+			v.isnull = true;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
+		}
+
+		mant = finteger;
+
+		// Mantissa is too large
+		if ((mant & ~PG_NUMERIC_MANTISSA_MASK) != 0) {
+			v.isnull = true;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
+		}
 	}
 
 	v.isnull = false;
@@ -726,44 +746,19 @@ pgfn_int2_numeric(__private int *errcode, pg_int2_t arg)
 
 
 static pg_numeric_t
-pgfn_int4_numeric(__private int *errcode, pg_int4_t arg)
+pg_int2_numeric(__private int *errcode, pg_int2_t arg)
 {
-	pg_numeric_t	v;
-	int				sign;
-	int				expo;
-	cl_ulong		mant;
+	pg_int8_t tmp = { arg.isnull, arg.value };
+	return integer_to_numeric(errcode, tmp, sizeof(arg.value));
+}
 
 
-	if (arg.isnull) {
-		v.isnull = true;
-		v.value  = 0;
-		return v;
-	}
-		
-	if (arg.value == 0) {
-		v.isnull = false;
-		v.value  = PG_NUMERIC_SET(0, 0, 0);
-		return v;
-	}
 
-	if (0 <= arg.value) {
-		sign = 0;
-		mant = arg.value;
-	} else {
-		sign = 1;
-		mant = -arg.value;
-	}
-
-	// Normalize
-	while (mant % 10 == 0  &&  expo < PG_NUMERIC_EXPONENT_MAX) {
-		mant /= 10;
-		expo ++;
-	}
-
-	v.isnull = false;
-	v.value  = PG_NUMERIC_SET(expo, sign, mant);
-
-	return v;
+static pg_numeric_t
+pg_int4_numeric(__private int *errcode, pg_int4_t arg)
+{
+	pg_int8_t tmp = { arg.isnull, arg.value };
+	return integer_to_numeric(errcode, tmp, sizeof(arg.value));
 }
 
 
@@ -771,50 +766,7 @@ pgfn_int4_numeric(__private int *errcode, pg_int4_t arg)
 static pg_numeric_t
 pgfn_int8_numeric(__private int *errcode, pg_int8_t arg)
 {
-	pg_numeric_t	v;
-	int				sign;
-	int				expo;
-	cl_ulong		mant;
-
-
-	if (arg.isnull) {
-		v.isnull = true;
-		v.value  = 0;
-		return v;
-	}
-		
-	if (arg.value == 0) {
-		v.isnull = false;
-		v.value  = PG_NUMERIC_SET(0, 0, 0);
-		return v;
-	}
-
-	if (0 <= arg.value) {
-		sign = 0;
-		mant = arg.value;
-	} else {
-		sign = 1;
-		mant = -arg.value;
-	}
-
-	// Normalize
-	while (mant % 10 == 0  &&  expo < PG_NUMERIC_EXPONENT_MAX) {
-		mant /= 10;
-		expo ++;
-	}
-
-	// Error check
-	if (mant & ~PG_NUMERIC_MANTISSA_MASK) {
-		v.isnull = true;
-		v.value  = 0;
-		*errcode = StromError_CpuReCheck;
-		return v;
-	}
-
-	v.isnull = false;
-	v.value  = PG_NUMERIC_SET(expo, sign, mant);
-
-	return v;
+	return integer_to_numeric(errcode, arg, sizeof(arg.value));
 }
 
 
@@ -822,6 +774,8 @@ pgfn_int8_numeric(__private int *errcode, pg_int8_t arg)
 static pg_numeric_t
 pgfn_float4_numeric(__private int *errcode, pg_float4_t arg)
 {
+	pg_float8_t	tmp = { arg.isnull, (cl_double)arg.value };
+
 	pg_numeric_t	v;
 	int				sign;
 	int				expo;
@@ -935,112 +889,7 @@ pgfn_float4_numeric(__private int *errcode, pg_float4_t arg)
 static pg_numeric_t
 pgfn_float8_numeric(__private int *errcode, pg_float8_t arg)
 {
-	pg_numeric_t	v;
-	int				sign;
-	int				expo;
-	cl_ulong		mant;
-	cl_double		fval, finteger, fdecimal;
-
-
-	if (arg.isnull) {
-		v.isnull = true;
-		v.value  = 0;
-		return v;
-	}
-
-	if(isnan(arg.value)) {
-		v.isnull = true;
-		v.value  = 0;
-		*errcode = StromError_CpuReCheck;
-		return v;
-	}
-		
-	if(isinf(arg.value)) {
-		v.isnull = true;
-		v.value  = 0;
-		*errcode = StromError_CpuReCheck;
-		return v;
-	}
-
-
-	if (0 <= arg.value) {
-		sign = 0;
-		fval = arg.value;
-	} else {
-		sign = 1;
-		fval = -arg.value;
-	}
-
-	finteger = floor(fval);
-	fdecimal = fval - finteger;
-
-	if (fdecimal != 0.0f) {
-		// Convert decimal
-
-		// Integer value is overflow
-		if (PG_NUMERIC_MANTISSA_MAX < finteger) {
-			v.isnull = true;
-			v.value  = 0;
-			*errcode = StromError_CpuReCheck;
-			return v;
-		}
-
-		expo = 0;
-		mant = finteger;
-		while (fdecimal != 0.0f) {
-			cl_double fdecimal10 = fdecimal * 10.0f;
-
-			mant = mant * 10 + (int)fdecimal10;
-			expo ++;
-
-			// Mantissa is too large
-			if ((mant & ~PG_NUMERIC_MANTISSA_MASK) != 0) {
-				v.isnull = true;
-				v.value  = 0;
-				*errcode = StromError_CpuReCheck;
-				return v;
-			}
-			
-			fdecimal = fdecimal10 - floor(fdecimal10);
-		}
-
-	} else {
-		// Convert big integer
-
-		// Normalize
-		expo = 0;
-		for (;;) {
-			cl_double finteger10 = finteger / 10.0f;
-			if (floor(finteger10) != finteger10) {
-				break;
-			}
-			finteger = finteger10;
-			expo ++;
-		}
-
-		// Mantissa is too large
-		if (PG_NUMERIC_MANTISSA_MAX < finteger) {
-			v.isnull = true;
-			v.value  = 0;
-			*errcode = StromError_CpuReCheck;
-			return v;
-		}
-
-		mant = finteger;
-
-		// Mantissa is too large
-		if ((mant & ~PG_NUMERIC_MANTISSA_MASK) != 0) {
-			v.isnull = true;
-			v.value  = 0;
-			*errcode = StromError_CpuReCheck;
-			return v;
-		}
-	}
-
-	v.isnull = false;
-	v.value  = PG_NUMERIC_SET(expo, sign, mant);
-
-	return v;
+	return float_to_numeric(errcode, arg);
 }
 
 
@@ -1088,88 +937,88 @@ pgfn_numeric_add(__private int *errcode,
 	if (arg1.isnull || arg2.isnull) {
 		v.isnull = true;
 		v.value  = 0;
+	}
 
-	} else {
-		int			expo1 = PG_NUMERIC_EXPONENT(arg1.value);
-		int			sign1 = PG_NUMERIC_SIGN(arg1.value);
-		cl_ulong	mant1 = PG_NUMERIC_MANTISSA(arg1.value);
+	int			expo1 = PG_NUMERIC_EXPONENT(arg1.value);
+	int			sign1 = PG_NUMERIC_SIGN(arg1.value);
+	cl_ulong	mant1 = PG_NUMERIC_MANTISSA(arg1.value);
 
-		int			expo2 = PG_NUMERIC_EXPONENT(arg2.value);
-		int			sign2 = PG_NUMERIC_SIGN(arg2.value);
-		cl_ulong	mant2 = PG_NUMERIC_MANTISSA(arg2.value);
+	int			expo2 = PG_NUMERIC_EXPONENT(arg2.value);
+	int			sign2 = PG_NUMERIC_SIGN(arg2.value);
+	cl_ulong	mant2 = PG_NUMERIC_MANTISSA(arg2.value);
 
-		// Change the number of digits
-		if (expo1 != expo2) {
-			int 	 expoDiff = abs(expo1 - expo2);
-			cl_ulong value	  = (expo1 < expo2) ? (mant2) : (mant1);
-			int      mag, i;
+	// Change the number of digits
+	if (expo1 != expo2) {
+		int 	 expoDiff = abs(expo1 - expo2);
+		cl_ulong value	  = (expo1 < expo2) ? (mant2) : (mant1);
+		int      mag, i;
 
-			mag = 1;
-			for (i=0; i < expoDiff; i++) {
-				mag *= 10;
-			}
-
-			// Overflow check
-			if ((value * mag) / mag != value) {
-				v.isnull = true;
-				v.value  = 0;
-				*errcode = StromError_CpuReCheck;
-				return v;
-			}
-
-			if (expo1 < expo2) {
-				mant2 = value * mag;
-				expo2 = expo1;
-			} else {
-				mant1 = value * mag;
-				expo1 = expo2;
-			}
+		mag = 1;
+		for (i=0; i < expoDiff; i++) {
+			mag *= 10;
 		}
 
-		// Add mantissa 
-		if (sign1 != sign2) {
-			if (mant1 < mant2) {
-				sign1 = sign2;
-				mant1 = mant2 - mant1;
-			} else {
-				mant1 -= mant2;
-			}
-		} else {
-			if ((mant1 + mant2) - mant2 != mant1) {
-				// Overflow
-				v.isnull = true;
-				v.value  = 0;
-				*errcode = StromError_CpuReCheck;
-				return v;
-			}
-			mant1 += mant2;
-		}
-
-		// Set 0 if mantissa is 0
-		if(mant1 == 0UL) {
-			v.isnull = false;
-			v.value  = PG_NUMERIC_SET(0, 0, 0);
-			return v;
-		}
-
-		// Normalize
-		while(mant1 % 10 == 0  &&  expo1 < PG_NUMERIC_EXPONENT_MAX) {
-			mant1 /= 10;
-			expo1 ++;
-		}
-
-		// Error check
-		if (expo1 < PG_NUMERIC_EXPONENT_MIN  ||  PG_NUMERIC_EXPONENT_MAX < expo1  ||  (mant1 & ~PG_NUMERIC_MANTISSA_MASK)) {
+		// Overflow check
+		if ((value * mag) / mag != value) {
 			v.isnull = true;
 			v.value  = 0;
 			*errcode = StromError_CpuReCheck;
 			return v;
 		}
 
-		// Set
-		v.isnull = false;
-		v.value  = PG_NUMERIC_SET(expo1, sign1, mant1);
+		if (expo1 < expo2) {
+			mant2 = value * mag;
+			expo2 = expo1;
+		} else {
+			mant1 = value * mag;
+			expo1 = expo2;
+		}
 	}
+
+	// Add mantissa 
+	if (sign1 != sign2) {
+		if (mant1 < mant2) {
+			sign1 = sign2;
+			mant1 = mant2 - mant1;
+		} else {
+			mant1 -= mant2;
+		}
+	} else {
+		if ((mant1 + mant2) - mant2 != mant1) {
+			// Overflow
+			v.isnull = true;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
+		}
+		mant1 += mant2;
+	}
+
+	// Set 0 if mantissa is 0
+	if(mant1 == 0UL) {
+		v.isnull = false;
+		v.value  = PG_NUMERIC_SET(0, 0, 0);
+		return v;
+	}
+
+	// Normalize
+	while(mant1 % 10 == 0  &&  expo1 < PG_NUMERIC_EXPONENT_MAX) {
+		mant1 /= 10;
+		expo1 ++;
+	}
+
+	// Error check
+	if (expo1 < PG_NUMERIC_EXPONENT_MIN || PG_NUMERIC_EXPONENT_MAX < expo1 ||
+		(mant1 & ~PG_NUMERIC_MANTISSA_MASK)) {
+		v.isnull = true;
+		v.value  = 0;
+		*errcode = StromError_CpuReCheck;
+		return v;
+	}
+
+	// Set
+	v.isnull = false;
+	v.value  = PG_NUMERIC_SET(expo1, sign1, mant1);
 
 	return v;
 }
@@ -1196,76 +1045,76 @@ pgfn_numeric_mul(__private int *errcode,
 	if (arg1.isnull || arg2.isnull) {
 		v.isnull = true;
 		v.value  = 0;
-
-	} else {
-		int			expo1 = PG_NUMERIC_EXPONENT(arg1.value);
-		int			sign1 = PG_NUMERIC_SIGN(arg1.value);
-		cl_ulong	mant1 = PG_NUMERIC_MANTISSA(arg1.value);
-
-		int			expo2 = PG_NUMERIC_EXPONENT(arg2.value);
-		int			sign2 = PG_NUMERIC_SIGN(arg2.value);
-		cl_ulong	mant2 = PG_NUMERIC_MANTISSA(arg2.value);
-
-		// Calculate exponential
-		expo1 += expo2;
-
-		// Calculate sign
-		sign1 ^= sign2;
- 
-		// Calculate mantissa
-		if ((mant1 * mant2) / mant2 != mant1) {
-			v.isnull = true;
-			v.value  = 0;
-			*errcode = StromError_CpuReCheck;
-			return v;
-		}
-		mant1 *= mant2;
-
-		// Set 0, if mantissa is 0.
-		if (mant1 == 0UL) {
-			v.isnull = false;
-			v.value  = PG_NUMERIC_SET(0, 0, 0);
-			return v;
-		}
-
-		// Normalize
-		while (mant1 % 10 == 0  &&  expo1 < PG_NUMERIC_EXPONENT_MAX) {
-			mant1 /= 10;
-			expo1 ++;
-		}
-
-		if(expo1 < PG_NUMERIC_EXPONENT_MIN) {
-			int expoDiff = PG_NUMERIC_EXPONENT_MIN - expo1;
-
-			int mag, i;
-
-			for (i=0, mag=1; i < expoDiff; i++) {
-				mag *= 10;
-			}
-
-			if ((mant1 * mag) / mag != mant1) {
-				// Underflow
-				v.isnull = false;
-				v.value  = 0;
-				*errcode = StromError_CpuReCheck;
-				return v;
-			}
-
-			mant1 *= mag;
-		}
-
-		// Error check
-		if (expo1 < PG_NUMERIC_EXPONENT_MIN  ||  PG_NUMERIC_EXPONENT_MAX < expo1  ||  (mant1 & ~PG_NUMERIC_MANTISSA_MASK)) {
-			v.isnull = true;
-			v.value  = 0;
-			*errcode = StromError_CpuReCheck;
-			return v;
-		}
-
-		// set
-		v.isnull = false;
-		v.value  = PG_NUMERIC_SET(expo1, sign1, mant1);
 	}
+
+	int			expo1 = PG_NUMERIC_EXPONENT(arg1.value);
+	int			sign1 = PG_NUMERIC_SIGN(arg1.value);
+	cl_ulong	mant1 = PG_NUMERIC_MANTISSA(arg1.value);
+
+	int			expo2 = PG_NUMERIC_EXPONENT(arg2.value);
+	int			sign2 = PG_NUMERIC_SIGN(arg2.value);
+	cl_ulong	mant2 = PG_NUMERIC_MANTISSA(arg2.value);
+
+	// Calculate exponential
+	expo1 += expo2;
+
+	// Calculate sign
+	sign1 ^= sign2;
+ 
+	// Calculate mantissa
+	if ((mant1 * mant2) / mant2 != mant1) {
+		v.isnull = true;
+		v.value  = 0;
+		*errcode = StromError_CpuReCheck;
+		return v;
+	}
+	mant1 *= mant2;
+
+	// Set 0, if mantissa is 0.
+	if (mant1 == 0UL) {
+		v.isnull = false;
+		v.value  = PG_NUMERIC_SET(0, 0, 0);
+		return v;
+	}
+
+	// Normalize
+	while (mant1 % 10 == 0  &&  expo1 < PG_NUMERIC_EXPONENT_MAX) {
+		mant1 /= 10;
+		expo1 ++;
+	}
+
+	if(expo1 < PG_NUMERIC_EXPONENT_MIN) {
+		int expoDiff = PG_NUMERIC_EXPONENT_MIN - expo1;
+
+		int mag, i;
+
+		for (i=0, mag=1; i < expoDiff; i++) {
+			mag *= 10;
+		}
+
+		if ((mant1 * mag) / mag != mant1) {
+			// Underflow
+			v.isnull = false;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
+		}
+
+		mant1 *= mag;
+	}
+
+	// Error check
+	if (expo1 < PG_NUMERIC_EXPONENT_MIN || PG_NUMERIC_EXPONENT_MAX < expo1 ||
+		(mant1 & ~PG_NUMERIC_MANTISSA_MASK)) {
+		v.isnull = true;
+		v.value  = 0;
+		*errcode = StromError_CpuReCheck;
+		return v;
+	}
+
+	// set
+	v.isnull = false;
+	v.value  = PG_NUMERIC_SET(expo1, sign1, mant1);
 
 	return v;
 }
@@ -1299,43 +1148,41 @@ numeric_cmp(__private cl_int *errcode, pg_numeric_t arg1, pg_numeric_t arg2)
 	}
 
 	// Compair the exponential/matissa.
-	{
-		int		 expoDiff = abs(expo1 - expo2);
+	int		 expoDiff = abs(expo1 - expo2);
 
-		cl_ulong mantL, mantR;
-		int mag, i, ret;
+	cl_ulong mantL, mantR;
+	int		 mag, i, ret;
 
-		for (i=0, mag=1; i < expoDiff; i++) {
-			mag *= 10;
-		}
-
-		if (expo1 < expo2) {
-			mantL = mant1;
-			mantR = mant2;	// arg2's exponential is large.
-		} else {
-			mantL = mant2;
-			mantR = mant1;	// arg1's exponential is large.
-		}
-
-		if ((mantR * mag) / mag != mantR  ||  mantL < mantR * mag) {
-			// mantR * mag is overflow, or larger than mantL
-			ret = 1;
-		} else if(mantL == mantR * mag) {
-			ret = 0;
-		} else {
-			ret = -1;
-		}
-
-		if(expo1 < expo2) {
-			ret *= -1;
-		}
-
-		if(sign1 != 0) {
-			ret *= -1;
-		}
-
-		return ret;
+	for (i=0, mag=1; i < expoDiff; i++) {
+		mag *= 10;
 	}
+
+	if (expo1 < expo2) {
+		mantL = mant1;
+		mantR = mant2;	// arg2's exponential is large.
+	} else {
+		mantL = mant2;
+		mantR = mant1;	// arg1's exponential is large.
+	}
+
+	if ((mantR * mag) / mag != mantR  ||  mantL < mantR * mag) {
+		// mantR * mag is overflow, or larger than mantL
+		ret = 1;
+	} else if(mantL == mantR * mag) {
+		ret = 0;
+	} else {
+		ret = -1;
+	}
+
+	if(expo1 < expo2) {
+		ret *= -1;
+	}
+
+	if(sign1 != 0) {
+		ret *= -1;
+	}
+
+	return ret;
 }
 
 
