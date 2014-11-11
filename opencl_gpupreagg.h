@@ -838,37 +838,131 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
 	kern_writeback_error_status(&kgpreagg->status, errcode, LOCAL_WORKMEM);
 }
 
-#if 0
 /*
- * gpupreagg_check_next - decision making whether we need to run next
- * reduction step actually.
- *
- * right now, we don't use this interface
+ * Helper macros for gpupreagg_aggcalc().
  */
-__kernel void
-gpupreagg_check_next(__global kern_gpupreagg *kgpreagg,
-					 __global kern_data_store *kds_old,
-					 __global kern_data_store *kds_new)
-{
-	/* used this function ? */
-	size_t	nrows_old	= kds_old->nitems;
-	size_t	nrows_new	= kds_new->nitems;
 
-	bool	needNextReduction;
-
-	if(nrows_old->flag_needNextReduction == false) {
-		needNextReduction = false;
-	} else {
-		if((nrows_old - nrows_new) < nrows_old / 10) {
-			needNextReduction = false;
-		} else {
-			needNextReduction = true;
-		}
+#define GPUPREAGG_AGGCALC_PMAX_TEMPLATE(field,accum,newval)			\
+	if (!(newval)->isnull)											\
+	{																\
+		if ((accum)->isnull)										\
+			(accum)->##field##_val = (newval)->##field##val;		\
+		else														\
+			(accum)->##field##_val = max((accum)->##field##_val,	\
+										 (newval)->##field##val);	\
+		(accum)->isnull = false;									\
 	}
 
-	nrows_new->flag_needNextReduction = true;
-}
-#endif
+#define GPUPREAGG_AGGCALC_PMAX_TEMPLATE(field,accum,newval)			\
+	if (!(newval)->isnull)											\
+	{																\
+		if ((accum)->isnull)										\
+			(accum)->##field##_val = (newval)->##field##val;		\
+		else														\
+			(accum)->##field##_val = min((accum)->##field##_val,	\
+										 (newval)->##field##val);	\
+		(accum)->isnull = false;									\
+	}
+
+#define GPUPREAGG_AGGCALC_PMINMAX_NUMERIC_TEMPLATE(operator,errcode,accum,newval) \
+	if (!(newval)->isnull)										\
+	{															\
+		if ((accum)->isnull)									\
+			(accum)->long_val = (newval)->long_val;				\
+		else													\
+		{														\
+			pg_numeric_t	x;									\
+			pg_numeric_t	y;									\
+																\
+			x.isnull = y.isnull = false;						\
+			x.value = (accum)->long_val;						\
+			y.value = (newval)->long_val;						\
+																\
+			if (numeric_cmp(errcode,x,y) operator 0)			\
+				(accum)->long_val = (newval)->long_val;			\
+		}														\
+		(accum)->isnull = false;								\
+	}
+
+/* In-kernel PMAX() implementation */
+#define GPUPREAGG_AGGCALC_PMAX_SHORT(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMAX_INT(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMAX_LONG(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMAX_FLOAT(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMAX_DOUBLE(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMAX_NUMERIC(errcode,accum,newval)	\
+	GPUPREAGG_AGGCALC_PMINMAX_NUMERIC_TEMPLATE(<,errcode,accum,newval)
+
+/* In-kernel PMIN() implementation */
+#define GPUPREAGG_AGGCALC_PMIN_SHORT(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMIN_INT(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMIN_LONG(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMIN_FLOAT(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMIN_DOUBLE(errcode,accum,newval)		\
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+#define GPUPREAGG_AGGCALC_PMIN_NUMERIC(errcode,accum,newval)	\
+	GPUPREAGG_AGGCALC_PMINMAX_NUMERIC_TEMPLATE(>,errcode,accum,newval)
+
+/* In-kernel PSUM() implementation */
+#define GPUPREAGG_AGGCALC_PSUM_TEMPLATE(field,check_overflow,errcode,accum,newval) \
+	if (!(accum)->isnull)											\
+	{																\
+		if (!(newval)->isnull)										\
+		{															\
+			if (check_overflow((accum)->##field##_val,				\
+							   (newval)->##field##_val))			\
+				STROM_SET_ERROR(errcode, StromError_CpuReCheck);	\
+			(accum)->##field##_val += (newval)->##field##_val;		\
+		}															\
+	}																\
+	else if (!(newval)->isnull)										\
+	{																\
+		(accum)->isnull = (newval)->isnull;							\
+		(accum)->##field##_val = (newval)->##field##_val;			\
+	}
+
+#define GPUPREAGG_AGGCALC_PSUM_SHORT(errcode,accum,newval)			\
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(short,CHECK_OVERFLOW_INT,(errcode),(accum),(newval))
+#define GPUPREAGG_AGGCALC_PSUM_INT(errcode,accum,newval)			\
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(int,CHECK_OVERFLOW_INT,(errcode),(accum),(newval))
+#define GPUPREAGG_AGGCALC_PSUM_LONG(errcode,accum,newval)			\
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(long,CHECK_OVERFLOW_INT,(errcode),(accum),(newval))
+#define GPUPREAGG_AGGCALC_PSUM_FLOAT(errcode,accum,newval)			\
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(float,CHECK_OVERFLOW_FLOAT,(errcode),(accum),(newval))
+#define GPUPREAGG_AGGCALC_PSUM_DOUBLE(errcode,accum,newval)			\
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(double,CHECK_OVERFLOW_FLOAT,(errcode),(accum),(newval))
+#define GPUPREAGG_AGGCALC_PSUM_NUMERIC(errcode,accum,newval)		\
+	if (!(accum)->isnull)											\
+	{																\
+		if (!(newval)->isnull)										\
+		{															\
+			pg_numeric_t	x;										\
+			pg_numeric_t	y;										\
+			pg_numeric_t	r;										\
+																	\
+			x.isnull = y.isnull = false;							\
+			x.value = (accum)->long_value;							\
+			y.value = (newval)->long_value;							\
+																	\
+			r = pgfn_numeric_add(errcode,x,y);						\
+																	\
+			(accum)->value = r.value;								\
+		}															\
+		else if (!(newval)->isnull)									\
+		{															\
+			(accum)->isnull = (newval)->isnull;						\
+			(accum)->##field##_val = (newval)->##field##_val;		\
+		}															\
+	}
 
 #else
 /* Host side representation of kern_gpupreagg. It can perform as a message
