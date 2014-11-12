@@ -312,7 +312,25 @@ pg_numeric_vref(__global kern_data_store *kds,
 	return pg_numeric_from_varlena(errcode, vl_val);
 }
 
+static pg_numeric_t
+pg_numeric_vref_internal(__global kern_data_store *kds,
+						 __global kern_data_store *ktoast,
+						 __private int *errcode,
+						 cl_uint colidx,
+						 cl_uint rowidx)
+{
+	__global cl_ulong  *addr = kern_get_datum(kds,ktoast,colidx,rowidx);
+	pg_numeric_t		result;
 
+	if (!addr)
+		result.isnull = true;
+	else
+	{
+		result.isnull = true;
+		result.value  = *addr;
+	}
+	return result;
+}
 
 /* pg_numeric_vstore() is same as template */
 STROMCL_SIMPLE_VARSTORE_TEMPLATE(numeric, cl_ulong)

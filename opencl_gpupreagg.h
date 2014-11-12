@@ -955,12 +955,12 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
 			pg_numeric_t	r;										\
 																	\
 			x.isnull = y.isnull = false;							\
-			x.value = (accum)->long_value;							\
-			y.value = (newval)->long_value;							\
+			x.value = (accum)->long_val;							\
+			y.value = (newval)->long_val;							\
 																	\
 			r = pgfn_numeric_add(errcode,x,y);						\
 																	\
-			(accum)->value = r.value;								\
+			(accum)->long_val = r.value;							\
 		}															\
 		else if (!(newval)->isnull)									\
 		{															\

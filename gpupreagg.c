@@ -37,6 +37,7 @@
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/numeric.h"
 #include "utils/syscache.h"
 #include <math.h>
 #include "pg_strom.h"
@@ -123,118 +124,102 @@ typedef struct {
 	int			altfn_nargs;
 	Oid			altfn_argtypes[8];
 	int			altfn_argexprs[8];
+	int			altfn_flags;
 } aggfunc_catalog_t;
 static aggfunc_catalog_t  aggfunc_catalog[] = {
 	/* AVG(X) = EX_AVG(NROWS(), PSUM(X)) */
 	{ "avg",    1, {INT2OID},
 	  "s:avg",  2, {INT4OID, INT8OID},
-	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}, 0
 	},
 	{ "avg",    1, {INT4OID},
 	  "s:avg",  2, {INT4OID, INT8OID},
-	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}, 0
 	},
 	{ "avg",    1, {INT8OID},
 	  "s:avg_numeric",  2, {INT4OID, INT8OID},
-	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}, 0
 	},
 	{ "avg",    1, {FLOAT4OID},
 	  "s:avg",  2, {INT4OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}, 0
 	},
 	{ "avg",    1, {FLOAT8OID},
 	  "s:avg",  2, {INT4OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}, 0
 	},
 	{ "avg",	1, {NUMERICOID},
 	  "s:avg",	2, {INT4OID, NUMERICOID},
-	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM}, DEVFUNC_NEEDS_NUMERIC
 	},
 	/* COUNT(*) = SUM(NROWS(*|X)) */
-	{ "count", 0, {},        "c:sum", 1, {INT4OID},   {ALTFUNC_EXPR_NROWS}},
-	{ "count", 1, {ANYOID},  "c:sum", 1, {INT4OID},   {ALTFUNC_EXPR_NROWS}},
+	{ "count", 0, {},
+	  "c:sum", 1, {INT4OID},
+	  {ALTFUNC_EXPR_NROWS}, 0},
+	{ "count", 1, {ANYOID},
+	  "c:sum", 1, {INT4OID},
+	  {ALTFUNC_EXPR_NROWS}, 0},
 	/* MAX(X) = MAX(PMAX(X)) */
-	{ "max", 1, {INT2OID},   "c:max", 1, {INT2OID},   {ALTFUNC_EXPR_PMAX}},
-	{ "max", 1, {INT4OID},   "c:max", 1, {INT4OID},   {ALTFUNC_EXPR_PMAX}},
-	{ "max", 1, {INT8OID},   "c:max", 1, {INT8OID},   {ALTFUNC_EXPR_PMAX}},
-	{ "max", 1, {FLOAT4OID}, "c:max", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PMAX}},
-	{ "max", 1, {FLOAT8OID}, "c:max", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PMAX}},
-	{ "max", 1, {NUMERICOID},"c:max", 1, {NUMERICOID},{ALTFUNC_EXPR_PMAX}},
+	{ "max", 1, {INT2OID},   "c:max", 1, {INT2OID},   {ALTFUNC_EXPR_PMAX}, 0},
+	{ "max", 1, {INT4OID},   "c:max", 1, {INT4OID},   {ALTFUNC_EXPR_PMAX}, 0},
+	{ "max", 1, {INT8OID},   "c:max", 1, {INT8OID},   {ALTFUNC_EXPR_PMAX}, 0},
+	{ "max", 1, {FLOAT4OID}, "c:max", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PMAX}, 0},
+	{ "max", 1, {FLOAT8OID}, "c:max", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PMAX}, 0},
+	{ "max", 1, {NUMERICOID},"c:max", 1, {NUMERICOID},
+	  {ALTFUNC_EXPR_PMAX}, DEVFUNC_NEEDS_NUMERIC},
 	/* MIX(X) = MIN(PMIN(X)) */
-	{ "min", 1, {INT2OID},   "c:min", 1, {INT2OID},   {ALTFUNC_EXPR_PMIN}},
-	{ "min", 1, {INT4OID},   "c:min", 1, {INT4OID},   {ALTFUNC_EXPR_PMIN}},
-	{ "min", 1, {INT8OID},   "c:min", 1, {INT8OID},   {ALTFUNC_EXPR_PMIN}},
-	{ "min", 1, {FLOAT4OID}, "c:min", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PMIN}},
-	{ "min", 1, {FLOAT8OID}, "c:min", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PMIN}},
-	{ "min", 1, {NUMERICOID},"c:min", 1, {NUMERICOID},{ALTFUNC_EXPR_PMIN}},
+	{ "min", 1, {INT2OID},   "c:min", 1, {INT2OID},   {ALTFUNC_EXPR_PMIN}, 0},
+	{ "min", 1, {INT4OID},   "c:min", 1, {INT4OID},   {ALTFUNC_EXPR_PMIN}, 0},
+	{ "min", 1, {INT8OID},   "c:min", 1, {INT8OID},   {ALTFUNC_EXPR_PMIN}, 0},
+	{ "min", 1, {FLOAT4OID}, "c:min", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PMIN}, 0},
+	{ "min", 1, {FLOAT8OID}, "c:min", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PMIN}, 0},
+	{ "min", 1, {NUMERICOID},"c:min", 1, {NUMERICOID},
+	  {ALTFUNC_EXPR_PMIN}, DEVFUNC_NEEDS_NUMERIC},
 	/* SUM(X) = SUM(PSUM(X)) */
-	{ "sum", 1, {INT2OID},   "s:sum", 1, {INT8OID},   {ALTFUNC_EXPR_PSUM}},
-	{ "sum", 1, {INT4OID},   "s:sum", 1, {INT8OID},   {ALTFUNC_EXPR_PSUM}},
-	{ "sum", 1, {FLOAT4OID}, "c:sum", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PSUM}},
-	{ "sum", 1, {FLOAT8OID}, "c:sum", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PSUM}},
-	{ "sum", 1, {NUMERICOID},"s:sum", 1, {NUMERICOID},{ALTFUNC_EXPR_PSUM}},
+	{ "sum", 1, {INT2OID},   "s:sum", 1, {INT8OID},   {ALTFUNC_EXPR_PSUM}, 0},
+	{ "sum", 1, {INT4OID},   "s:sum", 1, {INT8OID},   {ALTFUNC_EXPR_PSUM}, 0},
+	{ "sum", 1, {FLOAT4OID}, "c:sum", 1, {FLOAT4OID}, {ALTFUNC_EXPR_PSUM}, 0},
+	{ "sum", 1, {FLOAT8OID}, "c:sum", 1, {FLOAT8OID}, {ALTFUNC_EXPR_PSUM}, 0},
+	{ "sum", 1, {NUMERICOID},"c:sum", 1, {NUMERICOID},
+	  {ALTFUNC_EXPR_PSUM}, DEVFUNC_NEEDS_NUMERIC},
 	/* STDDEV(X) = EX_STDDEV(NROWS(),PSUM(X),PSUM(X*X)) */
 	{ "stddev", 1, {FLOAT4OID},
 	  "s:stddev", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "stddev", 1, {FLOAT8OID},
 	  "s:stddev", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "stddev_pop", 1, {FLOAT4OID},
 	  "s:stddev_pop", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "stddev_pop", 1, {FLOAT8OID},
 	  "s:stddev_pop", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "stddev_samp", 1, {FLOAT4OID},
 	  "s:stddev_samp", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "stddev_samp", 1, {FLOAT8OID},
 	  "s:stddev_samp", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	/* VARIANCE(X) = PGSTROM.VARIANCE(NROWS(), PSUM(X),PSUM(X^2)) */
 	{ "variance", 1, {FLOAT4OID},
 	  "s:variance", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "variance", 1, {FLOAT8OID},
 	  "s:variance", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "var_pop", 1, {FLOAT4OID},
 	  "s:var_pop", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "var_pop", 1, {FLOAT8OID},
 	  "s:var_pop", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "var_samp", 1, {FLOAT4OID},
 	  "s:var_samp", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	{ "var_samp", 1, {FLOAT8OID},
 	  "s:var_samp", 3, {INT4OID, FLOAT8OID, FLOAT8OID},
-	  {ALTFUNC_EXPR_NROWS,
-	   ALTFUNC_EXPR_PSUM,
-	   ALTFUNC_EXPR_PSUM_X2}},
+	  {ALTFUNC_EXPR_NROWS, ALTFUNC_EXPR_PSUM, ALTFUNC_EXPR_PSUM_X2}, 0},
 	/* CORR(X,Y) = PGSTROM.CORR(NROWS(X,Y),
 	 *                          PCOV_X(X,Y),  PCOV_Y(X,Y)
 	 *                          PCOV_X2(X,Y), PCOV_Y2(X,Y),
@@ -248,7 +233,7 @@ static aggfunc_catalog_t  aggfunc_catalog[] = {
 	   ALTFUNC_EXPR_PCOV_X2,
 	   ALTFUNC_EXPR_PCOV_Y,
 	   ALTFUNC_EXPR_PCOV_Y2,
-	   ALTFUNC_EXPR_PCOV_XY}},
+	   ALTFUNC_EXPR_PCOV_XY}, 0},
 	{ "covar_pop", 2, {FLOAT8OID, FLOAT8OID},
 	  "s:covar_pop", 6,
 	  {INT4OID, FLOAT8OID, FLOAT8OID, FLOAT8OID, FLOAT8OID, FLOAT8OID},
@@ -257,7 +242,7 @@ static aggfunc_catalog_t  aggfunc_catalog[] = {
 	   ALTFUNC_EXPR_PCOV_X2,
 	   ALTFUNC_EXPR_PCOV_Y,
 	   ALTFUNC_EXPR_PCOV_Y2,
-	   ALTFUNC_EXPR_PCOV_XY}},
+	   ALTFUNC_EXPR_PCOV_XY}, 0},
 	{ "covar_samp", 2, {FLOAT8OID, FLOAT8OID},
 	  "s:covar_samp", 6,
 	  {INT4OID, FLOAT8OID, FLOAT8OID, FLOAT8OID, FLOAT8OID, FLOAT8OID},
@@ -266,7 +251,7 @@ static aggfunc_catalog_t  aggfunc_catalog[] = {
 	   ALTFUNC_EXPR_PCOV_X2,
 	   ALTFUNC_EXPR_PCOV_Y,
 	   ALTFUNC_EXPR_PCOV_Y2,
-	   ALTFUNC_EXPR_PCOV_XY}},
+	   ALTFUNC_EXPR_PCOV_XY}, 0},
 };
 
 static const aggfunc_catalog_t *
@@ -667,7 +652,8 @@ make_altfunc_pcov_expr(Aggref *aggref, const char *func_name)
 		filter = (Expr *) makeBoolConst(true, false);
 	else
 		filter = copyObject(aggref->aggfilter);
-	return make_altfunc_expr(func_name, list_make3(filter, tle_1->expr, tle_2->expr));
+	return make_altfunc_expr(func_name,
+							 list_make3(filter, tle_1->expr, tle_2->expr));
 }
 
 /*
@@ -677,7 +663,7 @@ make_altfunc_pcov_expr(Aggref *aggref, const char *func_name)
  * partially aggregated results on the target-list of GpuPreAgg node.
  */
 static Aggref *
-make_gpupreagg_refnode(Aggref *aggref, List **prep_tlist)
+make_gpupreagg_refnode(Aggref *aggref, List **prep_tlist, int *extra_flags)
 {
 	const aggfunc_catalog_t *aggfn_cat;
 	const char *altfn_name;
@@ -703,6 +689,8 @@ make_gpupreagg_refnode(Aggref *aggref, List **prep_tlist)
 	Assert(!aggref->aggdirectargs &&
 		   !aggref->aggvariadic &&
 		   list_length(aggref->args) <= 2);
+	/* update extra flags */
+	*extra_flags |= aggfn_cat->altfn_flags;
 
 	/*
 	 * Expression node that is executed in the device kernel has to be
@@ -932,6 +920,7 @@ typedef struct
 	Agg		   *agg;
 	List	   *pre_tlist;
 	Bitmapset  *attr_refs;
+	int			extra_flags;
 	bool		gpupreagg_invalid;
 } gpupreagg_rewrite_context;
 
@@ -946,7 +935,9 @@ gpupreagg_rewrite_mutator(Node *node, gpupreagg_rewrite_context *context)
 		Aggref	   *orgagg = (Aggref *) node;
 		Aggref	   *altagg = NULL;
 
-		altagg = make_gpupreagg_refnode(orgagg, &context->pre_tlist);
+		altagg = make_gpupreagg_refnode(orgagg,
+										&context->pre_tlist,
+										&context->extra_flags);
 		if (!altagg)
 			context->gpupreagg_invalid = true;
 		return (Node *) altagg;
@@ -981,6 +972,7 @@ gpupreagg_rewrite_expr(Agg *agg,
 					   List **p_agg_quals,
 					   List **p_pre_tlist,
 					   Bitmapset **p_attr_refs,
+					   int	*p_extra_flags,
 					   bool *p_has_numeric)
 {
 	gpupreagg_rewrite_context context;
@@ -1071,6 +1063,7 @@ gpupreagg_rewrite_expr(Agg *agg,
 	context.agg = agg;
 	context.pre_tlist = pre_tlist;
 	context.attr_refs = attr_refs;
+	context.extra_flags = *p_extra_flags;
 
 	foreach (cell, agg->plan.targetlist)
 	{
@@ -1103,6 +1096,7 @@ gpupreagg_rewrite_expr(Agg *agg,
 	*p_agg_tlist = agg_tlist;
 	*p_agg_quals = agg_quals;
 	*p_attr_refs = context.attr_refs;
+	*p_extra_flags = context.extra_flags;
 	*p_has_numeric = has_numeric;
 	return true;
 }
@@ -1161,15 +1155,20 @@ gpupreagg_codegen_keycomp(GpuPreAggPlan *gpreagg, codegen_context *context)
 						 "  pg_%s_t ykeyval_%u;\n",
 						 dtype->type_name, resno,
 						 dtype->type_name, resno);
-		/* comparison logic */
+		/*
+		 * values comparison
+		 *
+		 * XXX - note that NUMERIC data type is already transformed to
+		 * the internal format on projection timing, so not a good idea
+		 * to use pg_numeric_vref() here, because it assumes Numeric in
+		 * varlena format.
+		 */
 		appendStringInfo(
 			&body,
 			"  xkeyval_%u = pg_%s_vref(kds,ktoast,errcode,%u,x_index);\n"
 			"  ykeyval_%u = pg_%s_vref(kds,ktoast,errcode,%u,y_index);\n"
-			//"printf(\"gid=%%zu xnull=%%d ynull=%%d\\n\", get_global_id(0), xkeyval_1.isnull, ykeyval_1.isnull);\n"
 			"  if (!xkeyval_%u.isnull && !ykeyval_%u.isnull)\n"
 			"  {\n"
-			//"printf(\"gid=%%zu x=%%d y=%%d\\n\", get_global_id(0), xkeyval_1.value, ykeyval_1.value);\n"
 			"    comp = pgfn_%s(errcode, xkeyval_%u, ykeyval_%u);\n"
 			"    if (!comp.isnull && comp.value != 0)\n"
 			"      return comp.value;\n"
@@ -1870,6 +1869,7 @@ pgstrom_try_insert_gpupreagg(PlannedStmt *pstmt, Agg *agg)
 	Cost			startup_sort;
 	Cost			total_sort;
 	const char	   *kern_source;
+	int				extra_flags = DEVKERNEL_NEEDS_GPUPREAGG;
 	codegen_context context;
 
 	/* nothing to do, if feature is turned off */
@@ -1885,6 +1885,7 @@ pgstrom_try_insert_gpupreagg(PlannedStmt *pstmt, Agg *agg)
 								&agg_quals,
 								&pre_tlist,
 								&attr_refs,
+								&extra_flags,
 								&has_numeric))
 		return;
 
@@ -1938,9 +1939,9 @@ pgstrom_try_insert_gpupreagg(PlannedStmt *pstmt, Agg *agg)
 	 */
 	kern_source = gpupreagg_codegen(gpreagg, &context);
 	gpreagg->kern_source = kern_source;
-	gpreagg->extra_flags = context.extra_flags |
-		DEVKERNEL_NEEDS_GPUPREAGG |
-		(!devprog_enable_optimize ? DEVKERNEL_DISABLE_OPTIMIZE : 0);
+	gpreagg->extra_flags = extra_flags | context.extra_flags;
+	if (!devprog_enable_optimize)
+		gpreagg->extra_flags |= DEVKERNEL_DISABLE_OPTIMIZE;
 	gpreagg->used_params = context.used_params;
 	pull_varattnos((Node *)context.used_vars,
 				   OUTER_VAR,
@@ -2192,9 +2193,11 @@ pgstrom_create_gpupreagg(GpuPreAggState *gpas, pgstrom_bulkslot *bulk)
 	 * Allocation of the result data-store
 	 */
 	tupdesc = gpas->cps.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
-	pds_dest = pgstrom_create_data_store_tupslot(tupdesc, (nvalids < 0
-														   ? nitems
-														   : nvalids));
+	pds_dest = pgstrom_create_data_store_tupslot(tupdesc,
+												 (nvalids < 0
+												  ? nitems
+												  : nvalids),
+												 gpas->has_numeric);
 	if (!pds_dest)
 		elog(ERROR, "out of shared memory");
 	gpupreagg->pds_dest = pds_dest;
@@ -3987,6 +3990,29 @@ gpupreagg_psum_x2_float(PG_FUNCTION_ARGS)
 	PG_RETURN_FLOAT8(PG_GETARG_FLOAT8(0) * PG_GETARG_FLOAT8(0));
 }
 PG_FUNCTION_INFO_V1(gpupreagg_psum_x2_float);
+
+Datum
+gpupreagg_psum_numeric(PG_FUNCTION_ARGS)
+{
+	Assert(PG_NARGS() == 1);
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+	PG_RETURN_NUMERIC(PG_GETARG_NUMERIC(0));
+}
+PG_FUNCTION_INFO_V1(gpupreagg_psum_numeric);
+
+Datum
+gpupreagg_psum_x2_numeric(PG_FUNCTION_ARGS)
+{
+	Assert(PG_NARGS() == 1);
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	PG_RETURN_NUMERIC(DirectFunctionCall2(numeric_mul,
+										  PG_GETARG_DATUM(0),
+										  PG_GETARG_DATUM(0)));
+}
+PG_FUNCTION_INFO_V1(gpupreagg_psum_x2_numeric);
 
 /* gpupreagg_corr_psum - placeholder function that generates partial sum
  * of the arguments. _x2 generates square value of the input

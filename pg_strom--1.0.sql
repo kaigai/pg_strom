@@ -165,7 +165,7 @@ CREATE FUNCTION pgstrom.pmin(float8)
   AS 'MODULE_PATHNAME', 'gpupreagg_pseudo_expr'
   LANGUAGE C STRICT;
 
--- Definition of Partial SUM (returns 64bit value)
+-- Definition of Partial SUM
 CREATE FUNCTION pgstrom.psum(int8)
   RETURNS int8
   AS 'MODULE_PATHNAME', 'gpupreagg_psum_int'
@@ -181,6 +181,14 @@ CREATE FUNCTION pgstrom.psum(float8)
 CREATE FUNCTION pgstrom.psum_x2(float8)
   RETURNS float8
   AS 'MODULE_PATHNAME', 'gpupreagg_psum_x2_float'
+  LANGUAGE C CALLED ON NULL INPUT;
+CREATE FUNCTION pgstrom.psum(numeric)
+  RETURNS numeric
+  AS 'MODULE_PATHNAME', 'gpupreagg_psum_numeric'
+  LANGUAGE C CALLED ON NULL INPUT;
+CREATE FUNCTION pgstrom.psum_x2(numeric)
+  RETURNS numeric
+  AS 'MODULE_PATHNAME', 'gpupreagg_psum_x2_numeric'
   LANGUAGE C CALLED ON NULL INPUT;
   
 -- Definition of Partial SUM for covariance (only float8)
@@ -283,14 +291,7 @@ CREATE AGGREGATE pgstrom.avg(int4, float8)
 CREATE FUNCTION pgstrom.numeric_avg_accum(internal, int4, numeric)
   RETURNS internal
   AS 'MODULE_PATHNAME', 'pgstrom_numeric_avg_accum'
-  LANGUAGE C STRICT;
-
-CREATE AGGREGATE pgstrom.sum(int4, numeric)
-(
-  sfunc = pgstrom.numeric_avg_accum,
-  stype = internal,
-  finalfunc = pg_catalog.numeric_sum
-);
+  LANGUAGE C CALLED ON NULL INPUT;
 
 CREATE AGGREGATE pgstrom.avg(int4, numeric)
 (
