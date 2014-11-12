@@ -159,8 +159,11 @@ pgstrom_fixup_kernel_numeric(Datum datum)
 	/* more effective implementation in the future :-) */
 	snprintf(temp, sizeof(temp), "%c%lue%d",
 			 sign ? '-' : '+', mantissa, expo);
-	elog(INFO, "numeric %016lx -> %s", numeric_value, temp);
-	return DirectFunctionCall1(numeric_in, CStringGetDatum(temp));
+	//elog(INFO, "numeric %016lx -> %s", numeric_value, temp);
+	return DirectFunctionCall3(numeric_in,
+							   CStringGetDatum(temp),
+							   Int32GetDatum(0),
+							   Int32GetDatum(-1));
 }
 
 bool
