@@ -1232,20 +1232,22 @@ gpupreagg_codegen_keycomp(GpuPreAggPlan *gpreagg, codegen_context *context)
  *                 __local pagg_datum *newval);
  */
 static inline const char *
-typeoid_to_pagg_field_name(Oid type_oid)
+aggcalc_method_of_typeoid(Oid type_oid)
 {
 	switch (type_oid)
 	{
 		case INT2OID:
-			return "short_val";
+			return "SHORT";
 		case INT4OID:
-			return "int_val";
+			return "INT";
 		case INT8OID:
-			return "long_val";
+			return "LONG";
 		case FLOAT4OID:
-			return "float_val";
+			return "FLOAT";
 		case FLOAT8OID:
-			return "double_val";
+			return "DOUBLE";
+		case NUMERICOID:
+			return "NUMERIC";
 	}
 	elog(ERROR, "unexpected partial aggregate data-type");
 }
@@ -1281,7 +1283,6 @@ gpupreagg_codegen_aggcalc(GpuPreAggPlan *gpreagg, codegen_context *context)
 		FuncExpr	   *func;
 		Oid				type_oid;
 		const char	   *func_name;
-		const char	   *field_name;
 
 		if (!IsA(tle->expr, FuncExpr))
 		{
@@ -1299,37 +1300,38 @@ gpupreagg_codegen_aggcalc(GpuPreAggPlan *gpreagg, codegen_context *context)
 
 		if (strcmp(func_name, "nrows") == 0)
 		{
-			/* XXX - nrows() should not have NULL */
-			field_name = typeoid_to_pagg_field_name(INT4OID);
+			/* nrows() is always int4 */
 			appendStringInfo(
-				&body,
+                &body,
 				"  case %d:\n"
-				"    accum->%s += newval->%s;\n"
+				"    GPUPREAGG_AGGCALC_PSUM_%s(errcode,accum,newval);\n"
 				"    break;\n",
 				tle->resno - 1,
-				field_name, field_name);
+				aggcalc_method_of_typeoid(INT4OID));
 		}
-		else if (strcmp(func_name, "pmax") == 0 ||
-				 strcmp(func_name, "pmin") == 0)
+		else if (strcmp(func_name, "pmax") == 0)
 		{
 			Assert(list_length(func->args) == 1);
 			type_oid = exprType(linitial(func->args));
-			field_name = typeoid_to_pagg_field_name(type_oid);
 			appendStringInfo(
 				&body,
 				"  case %d:\n"
-				"    if (!newval->isnull)\n"
-				"    {\n"
-				"      if (accum->isnull)\n"
-				"        accum->%s = newval->%s;\n"
-				"      else\n"
-				"        accum->%s = %s(accum->%s, newval->%s);\n"
-				"      accum->isnull = false;\n"
-				"    }\n"
+				"    GPUPREAGG_AGGCALC_PMAX_%s(errcode,accum,newval);\n"
 				"    break;\n",
 				tle->resno - 1,
-				field_name, field_name,
-				field_name, func_name + 1, field_name, field_name);
+				aggcalc_method_of_typeoid(type_oid));
+		}
+		else if (strcmp(func_name, "pmin") == 0)
+		{
+			Assert(list_length(func->args) == 1);
+			type_oid = exprType(linitial(func->args));
+			appendStringInfo(
+				&body,
+				"  case %d:\n"
+				"    GPUPREAGG_AGGCALC_PMIN_%s(errcode,accum,newval);\n"
+				"    break;\n",
+				tle->resno - 1,
+				aggcalc_method_of_typeoid(type_oid));
 		}
 		else if (strcmp(func_name, "psum") == 0    ||
 				 strcmp(func_name, "psum_x2") == 0)
@@ -1337,31 +1339,13 @@ gpupreagg_codegen_aggcalc(GpuPreAggPlan *gpreagg, codegen_context *context)
 			/* it should never be NULL */
 			Assert(list_length(func->args) == 1);
 			type_oid = exprType(linitial(func->args));
-			field_name = typeoid_to_pagg_field_name(type_oid);
 			appendStringInfo(
 				&body,
 				"  case %d:\n"
-				"    if (!accum->isnull)\n"
-				"    {\n"
-				"      if (!newval->isnull)\n"
-				"      {\n"
-				"        if (CHECK_OVERFLOW_%s(accum->%s, newval->%s))\n"
-				"          STROM_SET_ERROR(errcode, StromError_CpuReCheck);\n"
-				"        accum->%s += newval->%s;\n"
-				"      }\n"
-				"    }\n"
-				"    else if (!newval->isnull)\n"
-				"    {\n"
-				"      accum->%s = newval->%s;\n"
-				"      accum->isnull = false;\n"
-				"    }\n"
+				"    GPUPREAGG_AGGCALC_PSUM_%s(errcode,accum,newval);\n"
 				"    break;\n",
 				tle->resno - 1,
-				(type_oid == FLOAT4OID ||
-				 type_oid == FLOAT8OID) ? "FLOAT" : "INT",
-				field_name, field_name,
-				field_name, field_name,
-				field_name, field_name);
+				aggcalc_method_of_typeoid(type_oid));
 		}
 		else if (strcmp(func_name, "pcov_x") == 0  ||
 				 strcmp(func_name, "pcov_y") == 0  ||
@@ -1370,30 +1354,13 @@ gpupreagg_codegen_aggcalc(GpuPreAggPlan *gpreagg, codegen_context *context)
 				 strcmp(func_name, "pcov_xy") == 0)
 		{
 			/* covariance takes only float8 datatype */
-			/* it should never be NULL */
-			field_name = typeoid_to_pagg_field_name(FLOAT8OID);
 			appendStringInfo(
 				&body,
 				"  case %d:\n"
-				"    if (!accum->isnull)\n"
-				"    {\n"
-				"      if (!newval->isnull)\n"
-				"      {\n"
-				"        if (CHECK_OVERFLOW_FLOAT(accum->%s, newval->%s))\n"
-				"          STROM_SET_ERROR(errcode, StromError_CpuReCheck);\n"
-				"        accum->%s += newval->%s;\n"
-				"      }\n"
-				"    }\n"
-				"    else if (!newval->isnull)\n"
-				"    {\n"
-				"      accum->%s = newval->%s;\n"
-				"      accum->isnull = false;\n"
-				"    }\n"
+				"    GPUPREAGG_AGGCALC_PSUM_%s(errcode,accum,newval);\n"
 				"    break;\n",
 				tle->resno - 1,
-				field_name, field_name,
-				field_name, field_name,
-				field_name, field_name);
+				aggcalc_method_of_typeoid(FLOAT8OID));
 		}
 		else
 		{

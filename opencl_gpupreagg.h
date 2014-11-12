@@ -842,29 +842,29 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
  * Helper macros for gpupreagg_aggcalc().
  */
 
-#define GPUPREAGG_AGGCALC_PMAX_TEMPLATE(field,accum,newval)			\
-	if (!(newval)->isnull)											\
-	{																\
-		if ((accum)->isnull)										\
-			(accum)->##field##_val = (newval)->##field##val;		\
-		else														\
-			(accum)->##field##_val = max((accum)->##field##_val,	\
-										 (newval)->##field##val);	\
-		(accum)->isnull = false;									\
+#define GPUPREAGG_AGGCALC_PMAX_TEMPLATE(FIELD,accum,newval)		\
+	if (!(newval)->isnull)										\
+	{															\
+		if ((accum)->isnull)									\
+			(accum)->FIELD##_val = (newval)->FIELD##_val;		\
+		else													\
+			(accum)->FIELD##_val = max((accum)->FIELD##_val,	\
+									   (newval)->FIELD##_val);	\
+		(accum)->isnull = false;								\
 	}
 
-#define GPUPREAGG_AGGCALC_PMAX_TEMPLATE(field,accum,newval)			\
-	if (!(newval)->isnull)											\
-	{																\
-		if ((accum)->isnull)										\
-			(accum)->##field##_val = (newval)->##field##val;		\
-		else														\
-			(accum)->##field##_val = min((accum)->##field##_val,	\
-										 (newval)->##field##val);	\
-		(accum)->isnull = false;									\
+#define GPUPREAGG_AGGCALC_PMIN_TEMPLATE(FIELD,accum,newval)		\
+	if (!(newval)->isnull)										\
+	{															\
+		if ((accum)->isnull)									\
+			(accum)->FIELD##_val = (newval)->FIELD##_val;		\
+		else													\
+			(accum)->FIELD##_val = min((accum)->FIELD##_val,	\
+									   (newval)->FIELD##_val);	\
+		(accum)->isnull = false;								\
 	}
 
-#define GPUPREAGG_AGGCALC_PMINMAX_NUMERIC_TEMPLATE(operator,errcode,accum,newval) \
+#define GPUPREAGG_AGGCALC_PMINMAX_NUMERIC_TEMPLATE(OP,errcode,accum,newval) \
 	if (!(newval)->isnull)										\
 	{															\
 		if ((accum)->isnull)									\
@@ -878,7 +878,7 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
 			x.value = (accum)->long_val;						\
 			y.value = (newval)->long_val;						\
 																\
-			if (numeric_cmp(errcode,x,y) operator 0)			\
+			if (numeric_cmp(errcode,x,y) OP 0)					\
 				(accum)->long_val = (newval)->long_val;			\
 		}														\
 		(accum)->isnull = false;								\
@@ -888,13 +888,13 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
 #define GPUPREAGG_AGGCALC_PMAX_SHORT(errcode,accum,newval)		\
 	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMAX_INT(errcode,accum,newval)		\
-	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(int,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMAX_LONG(errcode,accum,newval)		\
-	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(long,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMAX_FLOAT(errcode,accum,newval)		\
-	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(float,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMAX_DOUBLE(errcode,accum,newval)		\
-	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(short,(accum),(newval))
+	GPUPREAGG_AGGCALC_PMAX_TEMPLATE(double,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMAX_NUMERIC(errcode,accum,newval)	\
 	GPUPREAGG_AGGCALC_PMINMAX_NUMERIC_TEMPLATE(<,errcode,accum,newval)
 
@@ -902,44 +902,49 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
 #define GPUPREAGG_AGGCALC_PMIN_SHORT(errcode,accum,newval)		\
 	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMIN_INT(errcode,accum,newval)		\
-	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(int,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMIN_LONG(errcode,accum,newval)		\
-	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(long,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMIN_FLOAT(errcode,accum,newval)		\
-	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(float,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMIN_DOUBLE(errcode,accum,newval)		\
-	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(short,(accum),(newval))
+	GPUPREAGG_AGGCALC_PMIN_TEMPLATE(double,(accum),(newval))
 #define GPUPREAGG_AGGCALC_PMIN_NUMERIC(errcode,accum,newval)	\
 	GPUPREAGG_AGGCALC_PMINMAX_NUMERIC_TEMPLATE(>,errcode,accum,newval)
 
 /* In-kernel PSUM() implementation */
-#define GPUPREAGG_AGGCALC_PSUM_TEMPLATE(field,check_overflow,errcode,accum,newval) \
+#define GPUPREAGG_AGGCALC_PSUM_TEMPLATE(FIELD,OVERFLOW,errcode,accum,newval) \
 	if (!(accum)->isnull)											\
 	{																\
 		if (!(newval)->isnull)										\
 		{															\
-			if (check_overflow((accum)->##field##_val,				\
-							   (newval)->##field##_val))			\
+			if (OVERFLOW((accum)->FIELD##_val,						\
+						 (newval)->FIELD##_val))					\
 				STROM_SET_ERROR(errcode, StromError_CpuReCheck);	\
-			(accum)->##field##_val += (newval)->##field##_val;		\
+			(accum)->FIELD##_val += (newval)->FIELD##_val;			\
 		}															\
 	}																\
 	else if (!(newval)->isnull)										\
 	{																\
 		(accum)->isnull = (newval)->isnull;							\
-		(accum)->##field##_val = (newval)->##field##_val;			\
+		(accum)->FIELD##_val = (newval)->FIELD##_val;				\
 	}
 
 #define GPUPREAGG_AGGCALC_PSUM_SHORT(errcode,accum,newval)			\
-	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(short,CHECK_OVERFLOW_INT,(errcode),(accum),(newval))
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(short,CHECK_OVERFLOW_INT,		\
+									(errcode),(accum),(newval))
 #define GPUPREAGG_AGGCALC_PSUM_INT(errcode,accum,newval)			\
-	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(int,CHECK_OVERFLOW_INT,(errcode),(accum),(newval))
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(int,CHECK_OVERFLOW_INT,			\
+									(errcode),(accum),(newval))
 #define GPUPREAGG_AGGCALC_PSUM_LONG(errcode,accum,newval)			\
-	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(long,CHECK_OVERFLOW_INT,(errcode),(accum),(newval))
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(long,CHECK_OVERFLOW_INT,		\
+									(errcode),(accum),(newval))
 #define GPUPREAGG_AGGCALC_PSUM_FLOAT(errcode,accum,newval)			\
-	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(float,CHECK_OVERFLOW_FLOAT,(errcode),(accum),(newval))
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(float,CHECK_OVERFLOW_FLOAT,		\
+									(errcode),(accum),(newval))
 #define GPUPREAGG_AGGCALC_PSUM_DOUBLE(errcode,accum,newval)			\
-	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(double,CHECK_OVERFLOW_FLOAT,(errcode),(accum),(newval))
+	GPUPREAGG_AGGCALC_PSUM_TEMPLATE(double,CHECK_OVERFLOW_FLOAT,	\
+									(errcode),(accum),(newval))
 #define GPUPREAGG_AGGCALC_PSUM_NUMERIC(errcode,accum,newval)		\
 	if (!(accum)->isnull)											\
 	{																\
@@ -960,7 +965,7 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
 		else if (!(newval)->isnull)									\
 		{															\
 			(accum)->isnull = (newval)->isnull;						\
-			(accum)->##field##_val = (newval)->##field##_val;		\
+			(accum)->long_val = (newval)->long_val;					\
 		}															\
 	}
 
