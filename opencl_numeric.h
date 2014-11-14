@@ -298,8 +298,14 @@ pg_numeric_from_varlena(__private int *errcode, __global varlena *vl_val)
 	return result;
 }
 
-
-
+/*
+ * pg_numeric_vref
+ *
+ * It contains special case handling due to internal numeric format.
+ * If kds intends to have varlena format (PostgreSQL compatible), it tries
+ * to reference varlena variable. Otherwise, in case when attlen > 0, it
+ * tries to fetch fixed-length variable.
+ */
 static pg_numeric_t
 pg_numeric_vref(__global kern_data_store *kds,
 				__global kern_data_store *ktoast,
@@ -307,9 +313,19 @@ pg_numeric_vref(__global kern_data_store *kds,
 				cl_uint colidx,
 				cl_uint rowidx)
 {
-	__global varlena *vl_val = kern_get_datum(kds,ktoast,colidx,rowidx);
+	__global void  *addr = kern_get_datum(kds,ktoast,colidx,rowidx);
+	pg_numeric_t	result;
 
-	return pg_numeric_from_varlena(errcode, vl_val);
+	if (!addr)
+		result.isnull = true;
+	else if (kds->colmeta[colidx].attlen < 0)
+		result = pg_numeric_from_varlena(errcode, (__global varlena *)addr);
+	else
+	{
+		result.isnull = false;
+		result.value  = *((__global cl_ulong *) addr);
+	}
+	return result;
 }
 
 /* pg_numeric_vstore() is same as template */
