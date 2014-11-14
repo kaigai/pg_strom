@@ -962,11 +962,11 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
 																	\
 			(accum)->long_val = r.value;							\
 		}															\
-		else if (!(newval)->isnull)									\
-		{															\
-			(accum)->isnull = (newval)->isnull;						\
-			(accum)->long_val = (newval)->long_val;					\
-		}															\
+	}																\
+	else if (!(newval)->isnull)										\
+	{																\
+		(accum)->isnull = (newval)->isnull;							\
+		(accum)->long_val = (newval)->long_val;						\
 	}
 
 #else
