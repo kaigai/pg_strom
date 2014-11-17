@@ -506,9 +506,12 @@ extern void pgstrom_init_restrack(void);
  */
 extern Path *gpuscan_try_replace_seqscan_path(PlannerInfo *root, Path *path,
 											  List **p_upper_quals);
-extern Plan *gpuscan_try_replace_seqscan_plan(PlannedStmt *pstmt, Plan *plan,
-											  Bitmapset *attr_refs);
+extern Plan *gpuscan_try_replace_seqscan_plan(PlannedStmt *pstmt,
+											  Plan *plan,
+											  Bitmapset *attr_refs,
+											  List **p_upper_quals);
 extern bool pgstrom_gpuscan_can_bulkload(const CustomPlanState *cps);
+extern bool pgstrom_path_is_gpuscan(const Path *path);
 extern bool pgstrom_plan_is_gpuscan(const Plan *plan);
 extern void pgstrom_gpuscan_setup_bulkslot(PlanState *outer_ps,
 										   ProjectionInfo **p_bulk_proj,
@@ -526,6 +529,7 @@ multihash_put_tables(struct pgstrom_multihash_tables *mhtables);
 
 extern bool gpuhashjoin_support_multi_exec(const CustomPlanState *cps);
 extern bool pgstrom_plan_is_gpuhashjoin(const Plan *plan);
+extern bool pgstrom_plan_is_multihash(const Plan *plan);
 extern void pgstrom_gpuhashjoin_setup_bulkslot(PlanState *outer_ps,
 											   ProjectionInfo **p_bulk_proj,
 											   TupleTableSlot **p_bulk_slot);
