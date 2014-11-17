@@ -142,6 +142,10 @@ CREATE FUNCTION pgstrom.pmax(float8)
   RETURNS float8
   AS 'MODULE_PATHNAME', 'gpupreagg_pseudo_expr'
   LANGUAGE C STRICT;
+CREATE FUNCTION pgstrom.pmax(numeric)
+  RETURNS numeric
+  AS 'MODULE_PATHNAME', 'gpupreagg_pseudo_expr'
+  LANGUAGE C STRICT;
 
 -- Definition of Partial MIN
 CREATE FUNCTION pgstrom.pmin(int2)
@@ -161,6 +165,10 @@ CREATE FUNCTION pgstrom.pmin(float4)
   AS 'MODULE_PATHNAME', 'gpupreagg_pseudo_expr'
   LANGUAGE C STRICT;
 CREATE FUNCTION pgstrom.pmin(float8)
+  RETURNS float8
+  AS 'MODULE_PATHNAME', 'gpupreagg_pseudo_expr'
+  LANGUAGE C STRICT;
+CREATE FUNCTION pgstrom.pmin(numeric)
   RETURNS float8
   AS 'MODULE_PATHNAME', 'gpupreagg_pseudo_expr'
   LANGUAGE C STRICT;
