@@ -266,6 +266,14 @@ pg_numeric_from_varlena(__private int *errcode, __global varlena *vl_val)
 			int		i;
 			ulong	mag;
 
+			if (PG_MAX_DIGITS <= expoDiff) {
+				// magnify is overflow
+				result.isnull = true;
+				result.value  = 0;
+				*errcode = StromError_CpuReCheck;
+				return result;
+			}
+
 			for (i=0, mag=1; i < expoDiff; i++) {
 				mag *= 10;
 			}
@@ -951,6 +959,7 @@ pgfn_numeric_add(__private int *errcode,
 	if (arg1.isnull || arg2.isnull) {
 		v.isnull = true;
 		v.value  = 0;
+		return v;
 	}
 
 	int			expo1 = PG_NUMERIC_EXPONENT(arg1.value);
@@ -965,7 +974,16 @@ pgfn_numeric_add(__private int *errcode,
 	if (expo1 != expo2) {
 		int 	 expoDiff = abs(expo1 - expo2);
 		cl_ulong value	  = (expo1 < expo2) ? (mant2) : (mant1);
-		int      mag, i;
+		ulong    mag;
+		int      i;
+
+		if (PG_MAX_DIGITS <= expoDiff) {
+			// magnify is overflow
+			v.isnull = true;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
+		}
 
 		mag = 1;
 		for (i=0; i < expoDiff; i++) {
@@ -998,7 +1016,7 @@ pgfn_numeric_add(__private int *errcode,
 			mant1 -= mant2;
 		}
 	} else {
-		if ((mant1 + mant2) - mant2 != mant1) {
+		if ((mant1 + mant2) < mant1) {
 			// Overflow
 			v.isnull = true;
 			v.value  = 0;
@@ -1059,6 +1077,7 @@ pgfn_numeric_mul(__private int *errcode,
 	if (arg1.isnull || arg2.isnull) {
 		v.isnull = true;
 		v.value  = 0;
+		return v;
 	}
 
 	int			expo1 = PG_NUMERIC_EXPONENT(arg1.value);
@@ -1068,6 +1087,13 @@ pgfn_numeric_mul(__private int *errcode,
 	int			expo2 = PG_NUMERIC_EXPONENT(arg2.value);
 	int			sign2 = PG_NUMERIC_SIGN(arg2.value);
 	cl_ulong	mant2 = PG_NUMERIC_MANTISSA(arg2.value);
+
+	// Set 0, if mantissa is 0.
+	if (mant1 == 0UL || mant2 == 0UL) {
+		v.isnull = false;
+		v.value  = PG_NUMERIC_SET(0, 0, 0);
+		return v;
+	}
 
 	// Calculate exponential
 	expo1 += expo2;
@@ -1084,36 +1110,39 @@ pgfn_numeric_mul(__private int *errcode,
 	}
 	mant1 *= mant2;
 
-	// Set 0, if mantissa is 0.
-	if (mant1 == 0UL) {
-		v.isnull = false;
-		v.value  = PG_NUMERIC_SET(0, 0, 0);
-		return v;
-	}
-
 	// Normalize
 	while (mant1 % 10 == 0  &&  expo1 < PG_NUMERIC_EXPONENT_MAX) {
 		mant1 /= 10;
 		expo1 ++;
 	}
 
-	if(expo1 < PG_NUMERIC_EXPONENT_MIN) {
-		int expoDiff = PG_NUMERIC_EXPONENT_MIN - expo1;
+	if (PG_NUMERIC_EXPONENT_MAX < expo1) {
+		// Exponent is overflow.
+		int expoDiff = expo1 - PG_NUMERIC_EXPONENT_MAX;
 
-		int mag, i;
+		ulong mag;
+		int	i;
+
+		if (PG_MAX_DIGITS <= expoDiff) {
+			// magnify is overflow
+			v.isnull = true;
+			v.value  = 0;
+			*errcode = StromError_CpuReCheck;
+			return v;
+		}
 
 		for (i=0, mag=1; i < expoDiff; i++) {
 			mag *= 10;
 		}
 
 		if ((mant1 * mag) / mag != mant1) {
-			// Underflow
-			v.isnull = false;
+			v.isnull = true;
 			v.value  = 0;
 			*errcode = StromError_CpuReCheck;
 			return v;
 		}
 
+		expo1 -= expoDiff;
 		mant1 *= mag;
 	}
 
@@ -1162,14 +1191,11 @@ numeric_cmp(__private cl_int *errcode, pg_numeric_t arg1, pg_numeric_t arg2)
 	}
 
 	// Compair the exponential/matissa.
-	int		 expoDiff = abs(expo1 - expo2);
+	int		 expoDiff = min(PG_MAX_DIGITS, (int)(abs(expo1 - expo2)));
 
 	cl_ulong mantL, mantR;
-	int		 mag, i, ret;
-
-	for (i=0, mag=1; i < expoDiff; i++) {
-		mag *= 10;
-	}
+	ulong	 mag;
+	int		 i, ret;
 
 	if (expo1 < expo2) {
 		mantL = mant1;
@@ -1177,6 +1203,10 @@ numeric_cmp(__private cl_int *errcode, pg_numeric_t arg1, pg_numeric_t arg2)
 	} else {
 		mantL = mant2;
 		mantR = mant1;	// arg1's exponential is large.
+	}
+
+	for (i=0, mag=1; i < expoDiff; i++) {
+		mag *= 10;
 	}
 
 	if ((mantR * mag) / mag != mantR  ||  mantL < mantR * mag) {
