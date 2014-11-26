@@ -262,9 +262,9 @@ pg_numeric_from_varlena(__private int *errcode, __global varlena *vl_val)
 
 		if (PG_NUMERIC_EXPONENT_MAX < expo) {
 			// Exponent is overflow.
-			int expoDiff = PG_NUMERIC_EXPONENT_MAX - expo;
-
-			int mag, i;
+			int expoDiff = expo - PG_NUMERIC_EXPONENT_MAX;
+			int		i;
+			ulong	mag;
 
 			for (i=0, mag=1; i < expoDiff; i++) {
 				mag *= 10;
