@@ -169,7 +169,7 @@ CREATE FUNCTION pgstrom.pmin(float8)
   AS 'MODULE_PATHNAME', 'gpupreagg_pseudo_expr'
   LANGUAGE C STRICT;
 CREATE FUNCTION pgstrom.pmin(numeric)
-  RETURNS float8
+  RETURNS numeric
   AS 'MODULE_PATHNAME', 'gpupreagg_pseudo_expr'
   LANGUAGE C STRICT;
 
