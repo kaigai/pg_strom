@@ -580,7 +580,7 @@ pgfn_numeric_float4(__private int *errcode, pg_numeric_t arg)
 {
 
 	pg_float8_t tmp = numeric_to_float(errcode, arg);
-	pg_float4_t	v   = { tmp.isnull, (cl_float)tmp.value };
+	pg_float4_t	v   = { (cl_float)tmp.value, tmp.isnull };
 
 	if (v.isnull == false  &&  isinf(tmp.value)) {
 		tmp.isnull	= true;
@@ -629,6 +629,7 @@ integer_to_numeric(__private int *errcode, pg_int8_t arg, cl_int size)
 		sign = 1;
 		mant = -arg.value;
 	}
+	expo = 0;
 
 	// Normalize
 	while (mant % 10 == 0  &&  expo < PG_NUMERIC_EXPONENT_MAX) {
@@ -768,18 +769,18 @@ float_to_numeric(__private int *errcode, pg_float8_t arg)
 
 
 static pg_numeric_t
-pg_int2_numeric(__private int *errcode, pg_int2_t arg)
+pgfn_int2_numeric(__private int *errcode, pg_int2_t arg)
 {
-	pg_int8_t tmp = { arg.isnull, arg.value };
+	pg_int8_t tmp = { arg.value, arg.isnull };
 	return integer_to_numeric(errcode, tmp, sizeof(arg.value));
 }
 
 
 
 static pg_numeric_t
-pg_int4_numeric(__private int *errcode, pg_int4_t arg)
+pgfn_int4_numeric(__private int *errcode, pg_int4_t arg)
 {
-	pg_int8_t tmp = { arg.isnull, arg.value };
+	pg_int8_t tmp = { arg.value, arg.isnull };
 	return integer_to_numeric(errcode, tmp, sizeof(arg.value));
 }
 
@@ -796,7 +797,7 @@ pgfn_int8_numeric(__private int *errcode, pg_int8_t arg)
 static pg_numeric_t
 pgfn_float4_numeric(__private int *errcode, pg_float4_t arg)
 {
-	pg_float8_t	tmp = { arg.isnull, (cl_double)arg.value };
+	pg_float8_t tmp = { (cl_double)arg.value, arg.isnull };
 
 	pg_numeric_t	v;
 	int				sign;
