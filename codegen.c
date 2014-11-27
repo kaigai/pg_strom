@@ -506,6 +506,7 @@ static devfunc_catalog_t devfunc_numericlib_catalog[] = {
 	{ "numeric_uplus",  1, {NUMERICOID}, "F:numeric_uplus", NULL },
 	{ "numeric_uminus", 1, {NUMERICOID}, "F:numeric_uminus", NULL },
 	{ "numeric_abs",    1, {NUMERICOID}, "F:numeric_abs", NULL },
+	{ "abs",            1, {NUMERICOID}, "F:numeric_abs", NULL },
 	/* Numeric comparison */
 	{ "numeric_eq", 2, {NUMERICOID, NUMERICOID}, "F:numeric_eq", NULL },
 	{ "numeric_ne", 2, {NUMERICOID, NUMERICOID}, "F:numeric_ne", NULL },
