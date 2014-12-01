@@ -446,9 +446,14 @@ numeric_to_integer(__private int *errcode, pg_numeric_t arg, cl_int size)
 		v.value  = 0;
 	}
 
-	int exp = abs(expo);
-	int mag = 1;
+	int  exp = abs(expo);
+	long mag = 1;
 	for(int i=0; i<exp; i++) {
+		if((mag * 10) < mag) {
+			v.isnull = true;
+			v.value  = 0;
+			return v;
+		}
 		mag *= 10;
 	}
 
@@ -470,8 +475,8 @@ numeric_to_integer(__private int *errcode, pg_numeric_t arg, cl_int size)
 
 	// Overflow check
 	int      nbits       = size * CL_CHAR_BIT;
-	cl_ulong max_val     = (1 << (nbits - 1)) - 1;
-	cl_ulong abs_min_val = (1 << (nbits - 1));
+	cl_ulong max_val     = (1ULL << (nbits - 1)) - 1;
+	cl_ulong abs_min_val = (1ULL << (nbits - 1));
 	if((sign == 0 && max_val < mant) || (sign != 0 && abs_min_val < mant)) {
 		v.isnull = true;
 		v.value  = 0;
