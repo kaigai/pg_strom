@@ -7,14 +7,15 @@ OBJS  = main.o shmem.o codegen.o mqueue.o restrack.o grafter.o \
 	datastore.o gpuscan.o gpuhashjoin.o gpupreagg.o \
 	opencl_entry.o opencl_serv.o opencl_devinfo.o opencl_devprog.o \
 	opencl_common.o opencl_gpuscan.o opencl_gpupreagg.o opencl_hashjoin.o \
-	opencl_textlib.o opencl_timelib.o opencl_numeric.o
+	opencl_textlib.o opencl_timelib.o opencl_numeric.o opencl_atomic.o
 
 PG_CONFIG = pg_config
 PGSTROM_DEBUG := $(shell $(PG_CONFIG) --configure | grep -q "'--enable-debug'" && echo "-Wall -DPGSTROM_DEBUG=1 -O0")
 PG_CPPFLAGS := $(PGSTROM_DEBUG)
 EXTRA_CLEAN := opencl_common.c opencl_gpuscan.c \
 		opencl_gpupreagg.c opencl_hashjoin.c \
-		opencl_textlib.c opencl_timelib.c
+		opencl_textlib.c opencl_timelib.c \
+		opencl_numeric.c opencl_atomic.c
 
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
@@ -57,6 +58,12 @@ opencl_timelib.c: opencl_timelib.h
 
 opencl_numeric.c: opencl_numeric.h
 	(echo "const char *pgstrom_opencl_numeric_code ="; \
+	 sed -e 's/\\/\\\\/g' -e 's/\t/\\t/g' -e 's/"/\\"/g' \
+	     -e 's/^/  "/g' -e 's/$$/\\n"/g'< $^; \
+	 echo ";") > $@
+
+opencl_atomic.c: opencl_atomic.h
+	(echo "const char *pgstrom_opencl_atomic_code ="; \
 	 sed -e 's/\\/\\\\/g' -e 's/\t/\\t/g' -e 's/"/\\"/g' \
 	     -e 's/^/  "/g' -e 's/$$/\\n"/g'< $^; \
 	 echo ";") > $@

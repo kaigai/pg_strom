@@ -346,6 +346,18 @@ clserv_lookup_device_program(Datum dprog_key, pgstrom_message *message)
 			count++;
 		}
 
+		/* opencl atomic */
+		if (dprog->extra_flags & DEVFUNC_NEEDS_ATOMIC)
+		{
+			static size_t	atomic_code_length = 0;
+
+			if (!atomic_code_length)
+				atomic_code_length = strlen(pgstrom_opencl_atomic_code);
+			sources[count] = pgstrom_opencl_atomic_code;
+			lengths[count] = atomic_code_length;
+			count++;
+		}
+
 		/*
 		 * main logic for each GPU task (scan, sort, join)
 		 */

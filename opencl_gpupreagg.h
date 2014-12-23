@@ -28,7 +28,12 @@
  * +----------------+  -----
  * | status         |    ^
  * +----------------+    |
- * | rindex_len     |    |
+ * | hash_size      |    |
+ * +----------------+    |
+ * | pg_crc32[]     |    |
+ * |   :            |    |
+ * | CRC32 table    |    |
+ * | source         |    |
  * +----------------+    |
  * | kern_parambuf  |    |
  * | +--------------+    |
@@ -56,26 +61,15 @@
  * | |    :         |    |
  * | | rindex[N]    |    V
  * +-+--------------+  -----
- * | rindex[] for   |    ^
- * |  working of    |    |
- * |  bitonic sort  |  device onlye memory
- * |       :        |    |
- * |       :        |    V
- * +----------------+  -----
  */
 
 typedef struct
 {
 	cl_int			status;		/* result of kernel execution */
-	cl_int			sortbuf_len;/* length of sorting rindex[] that holds
-								 * row-index being sorted; must be length
-								 * of get_next_log2(nitems)
-								 */
-	char			__padding[8];	/* align to 128bits */
+	cl_int			hash_size;	/* size of hash-slots */
+	cl_uint			pg_crc32_table[256];	/* master CRC32 table */
+	char			__padding__[8];	/* alignment */
 	kern_parambuf	kparams;
-	/*
-	 * kern_row_map and rindexp[] for sorting will be here
-	 */
 } kern_gpupreagg;
 
 /* macro definitions to reference packed values */
@@ -88,22 +82,36 @@ typedef struct
 	 ((__global char *)(kgpreagg) +						\
 	  STROMALIGN(offsetof(kern_gpupreagg, kparams) +	\
 				 KERN_GPUPREAGG_PARAMBUF_LENGTH(kgpreagg))))
-#define KERN_GPUPREAGG_SORT_RINDEX(kgpreagg)			\
-	(KERN_GPUPREAGG_KROWMAP(kgpreagg)->rindex +			\
-	 (KERN_GPUPREAGG_KROWMAP(kgpreagg)->nvalids < 0		\
-	  ? 0 : KERN_GPUPREAGG_KROWMAP(kgpreagg)->nvalids))
-#define KERN_GPUPREAGG_BUFFER_SIZE(kgpreagg)			\
-	((uintptr_t)(KERN_GPUPREAGG_SORT_RINDEX(kgpreagg) +	\
-				 (kgpreagg)->sortbuf_len) -				\
+#define KERN_GPUPREAGG_BUFFER_SIZE(kgpreagg)						\
+	((uintptr_t)(KERN_GPUPREAGG_KROWMAP(kgpreagg)->rindex +			\
+				 (KERN_GPUPREAGG_KROWMAP(kgpreagg)->nvalids < 0		\
+				  ? 0												\
+				  : KERN_GPUPREAGG_KROWMAP(kgpreagg)->nvalids)) -	\
 	 (uintptr_t)(kgpreagg))
 #define KERN_GPUPREAGG_DMASEND_OFFSET(kgpreagg)			0
 #define KERN_GPUPREAGG_DMASEND_LENGTH(kgpreagg)			\
-	((uintptr_t)KERN_GPUPREAGG_SORT_RINDEX(kgpreagg) -	\
-	 (uintptr_t)(kgpreagg))
+	KERN_GPUPREAGG_BUFFER_SIZE(kgpreagg)
 #define KERN_GPUPREAGG_DMARECV_OFFSET(kgpreagg)			\
 	offsetof(kern_gpupreagg, status)
 #define KERN_GPUPREAGG_DMARECV_LENGTH(kgpreagg)			\
 	sizeof(cl_uint)
+
+/*
+ * NOTE: hashtable of gpupreagg is an array of pagg_hashslot.
+ * It contains a pair of hash value and index on the kern_data_store.
+ * On hash-table construction, it fetches on a slot using hash % hash_size.
+ * Then, if it is empty, thread put its hash value and either get_local_id(0)
+ * or get_global_id(0) according to the context. If not empty, reduction
+ * function tries to merge the value, or makes advance the slot.
+ */
+typedef union
+{
+	cl_ulong	value;		/* for atomic operation */
+	struct {
+		cl_uint	hash;
+		cl_uint	index;
+	};
+} pagg_hashslot;
 
 /*
  * NOTE: pagg_datum is a set of information to calculate running total.
@@ -446,6 +454,217 @@ out:
 	kern_writeback_error_status(&kgpreagg->status, errcode, LOCAL_WORKMEM);
 }
 
+__kernel void
+gpupreagg_init_hashslot(__global kern_gpupreagg *kgpreagg,
+						__global pagg_hashslot *hashslot)
+{
+	size_t	hash_size = kgpreagg->hash_size;
+	size_t	curr_index;
+
+	for (curr_index = get_global_id(0);
+		 curr_index < hash_size;
+		 curr_index += get_global_size(0))
+	{
+		hashslot[curr_index].hash = 0;
+		hashslot[curr_index].index = (cl_uint)(0xffffffff);
+	}
+}
+
+/*
+ * gpupreagg_local_reduction
+ *
+ *
+ *
+ * NOTE: It consumes Max(sizeof(pagg_hashslot) * 2 * get_local_size(0),
+ *                       sizeof(pagg_datum) * get_local_size(0)) of
+ *       local memory in the working area
+ */
+__kernel void
+gpupreagg_local_reduction(__global kern_gpupreagg *kgpreagg,
+						  __global kern_data_store *kds_src,
+						  __global kern_data_store *kds_dst,
+						  __global kern_data_store *ktoast,
+						  __global pagg_hashslot *global_hashslot,
+						  KERN_DYNAMIC_LOCAL_WORKMEM_ARG)
+{
+	size_t			hash_size = 2 * get_local_size(0);
+	size_t			hash_index;
+	size_t			dest_index;
+	size_t			i;
+	pagg_hashslot	old_slot;
+	pagg_hashslot	new_slot;
+	pagg_hashslot	cur_slot;
+	__local cl_uint			crc32_table[256];
+	__local size_t			base_index;
+	__local pagg_datum	   *l_data;
+	__local pagg_hashslot  *hashslot;
+
+	/* initialization prior to the global reduction */
+	gpupreagg_init_hashslot(kgpreagg, global_hashslot);
+
+	/*
+	 * calculation of the hash value of grouping keys in this record.
+	 * It tends to take massive amount of random access on global memory,
+	 * so it makes performance advantage to move the master table from
+	 * gloabl to the local memory first.
+	 */
+	for (i = get_local_id(0);
+		 i < lengthof(crc32_table);
+		 i += get_local_size(0))
+		crc32_table[crc_index] = kgpreagg->pg_crc32_table[crc_index];
+	barrier(CLK_LOCAL_MEM_FENCE);
+
+	hash_value = gpupreagg_hashvalue(&errcode, kds_src, ktoast, kds_index);
+
+	/*
+	 * Find a hash-slot to determine the item index that represents
+	 * a particular group-keys.
+	 * The array of hash-slot is initialized to 'all empty', so first
+	 * one will take a place using atomic operation. Then. here are
+	 * two cases for hash conflicts; case of same grouping-key, or
+	 * case of different grouping-key but same hash-value.
+	 * The first conflict case informs us the item-index responsible
+	 * to the grouping key. We cannot help the later case, so retry
+	 * the steps with next hash-slot.
+	 */
+	hashslot = (__local pagg_hashslot *)STROMALIGN(LOCAL_WORKMEM);
+	for (i = get_local_id(0); 
+		 i < hash_size;
+		 i += get_local_size(0))
+	{
+		hashslot[i].hash = 0;
+		hashslot[i].index = (cl_uint)(0xffffffff);
+	}
+	barrier(CLK_LOCAL_MEM_FENCE);
+
+	new_slot.hash = hash_value;
+	new_slot.index = get_local_id(0);
+	old_slot.hash = 0;
+	old_slot.index = (cl_uint)(0xffffffff);
+retry:
+	cur_slot.value = atom_cmpxchg(&hashslot[hash_index].value,
+								  old_slot.value,
+								  new_slot.value);
+	if (cur_slot.value == old_slot.value)
+		hash_index = new_slot.index;
+	else if (cur_slot.hash == old_slot.hash &&
+			 gpupreagg_keycomp() == 0)
+		hash_index = cur_slot.index;
+	else
+	{
+		new_slot.index = (new_slot.index + 1) % hash_size;
+		goto retry;
+	}
+	barrier(CLK_LOCAL_MEM_FENCE);
+
+	/*
+	 * Make a reservation on the destination kern_data_store
+	 * Only thread that is responsible to grouping-key (also, it shall
+	 * have same hash-index with get_local_id(0)) takes a place on the
+	 * destination kern_data_store.
+	 */
+	i = arithmetic_stairlike_add(get_local_id(0) == hash_index ? 1 : 0,
+								 LOCAL_WORKMEM, &ngroups);
+	if (get_local_id(0) == 0)
+		base_index = atomic_add(&kds_dst->nitems, ngroups);
+	barrier(CLK_LOCAL_MEM_FENCE);
+	if (kds_dst->nrooms < base_index + ngroups)
+	{
+		errcode = StromError_DataStoreNoSpace;
+		goto out;
+	}
+	dest_index = base_index + i;
+
+	/*
+	 * Local reduction for each column
+	 *
+	 * Any threads that are NOT responsible to grouping-key calculates
+	 * aggregation on the item that is responsibles.
+	 * Once atomic operations got finished, values of pagg_datum in the
+	 * respobsible thread will have partially aggregated one.
+	 *
+	 * NOTE: local memory shall be reused to l_data array, so hashslot[]
+	 * array is no longer available across here
+	 */
+	l_data = (__local pagg_datum *)STROMALIGN(LOCAL_WORKMEM);
+	for (cindex = 0; cindex < ncols; cindex++)
+	{
+		/*
+		 * In case when this column is either a grouping-key or not-
+		 * referenced one (thus, not a partial aggregation), all we
+		 * need to do is copying the data from the source to the
+		 * destination; without modification anything.
+		 */
+		if (gpagg_atts[cindex] != GPUPREAGG_FIELD_IS_AGGFUNC)
+		{
+			if (hash_index == get_local_id(0))
+			{
+				gpupreagg_data_move();
+				/* also, fixup varlena datum if needed */
+				pg_fixup_tupslot_varlena();
+			}
+			continue;
+		}
+
+		/* Load aggregation item to pagg_datum */
+		if (get_global_id(0) < nitems)
+		{
+			gpupreagg_data_load(l_data + get_local_id(0),
+								&errcode,
+								kds_src, ktoast,
+								cindex, get_global_id(0));
+		}
+		barrier(CLK_LOCAL_MEM_FENCE);
+
+		/* Reduction, using local atomic operation */
+		if (hash_index != get_local_id(0))
+		{
+			// do atomic operation on l_data[hash_index]->xxx_val
+			// probably, job of auto generated function
+			// or, GPUPREAGG_FIELD_IS_xxx may have information?
+		}
+		barrier(CLK_LOCAL_MEM_FENCE);
+
+		/* Move the value that is aggregated */
+		if (hash_index == get_local_id(0))
+		{
+			gpupreagg_data_store(&l_data + get_local_id(0),
+								 &errcode,
+								 kds_dst, ktoast,
+								 cindex, dest_index);
+			/*
+             * varlena should never appear here, so we don't need to
+             * put pg_fixup_tupslot_varlena() here
+             */
+		}
+		barrier(CLK_LOCAL_MEM_FENCE);
+	}
+}
+
+__kernel void
+gpupreagg_global_reduction(__global kern_gpupreagg *kgpreagg,
+						   __global kern_data_store *kds_src,
+						   __global kern_data_store *kds_dst,
+						   __global kern_data_store *ktoast,
+						   __global pagg_hashslot *hashslot,
+						   KERN_DYNAMIC_LOCAL_WORKMEM_ARG)
+{
+	/* Logic is almost same as _local_ version doing */
+
+	/* 1. calculation of hash value */
+	/* 2. find a hash slot on the global hashslot using atomic ops */
+	/* 3. allocation of result buffer */
+	/* 4. global reduction for each column */
+}
+
+
+
+
+
+
+
+
+#if 0
 /*
  * gpupreagg_reduction - entrypoint of the main logic for GpuPreAgg.
  * The both of kern_data_store have identical form that reflects running 
@@ -854,6 +1073,7 @@ gpupreagg_bitonic_merge(__global kern_gpupreagg *kgpreagg,
 
 	kern_writeback_error_status(&kgpreagg->status, errcode, LOCAL_WORKMEM);
 }
+#endif
 
 /*
  * Helper macros for gpupreagg_aggcalc().
